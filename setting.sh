@@ -1,11 +1,11 @@
 #!/bin/bash
 
 # Install ClickHouse
-if [ ! -f click_data ]; then
-    mkdir click_data
+if [ ! -f clickhouse ]; then
+    mkdir clickhouse
 fi
 
-cd click_data
+cd clickhouse
 
 if [ ! -f clickhouse ]; then
     curl https://clickhouse.com/ | sh

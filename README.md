@@ -13,5 +13,5 @@ bash setting.sh
 Then, to start the client:
 
 ```
-cd click_data && ./clickhouse client
+cd clickhouse && ./clickhouse client
 ```
