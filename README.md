@@ -12,6 +12,6 @@ bash setting.sh
 
 Then, to start the client:
 
-```
-cd clickhouse && ./clickhouse client
+```bash
+./clickhouse/clickhouse client
 ```
