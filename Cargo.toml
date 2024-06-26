@@ -1,0 +1,9 @@
+[package]
+name = "rust_playground"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytes = "1.6.0"
+klickhouse = { version = "0.13.0", features = ["tls", "refinery", "bb8"] }
+
