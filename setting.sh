@@ -17,9 +17,3 @@ echo $CLICKHOUSE_CONFIG_FILE
 killall clickhouse
 
 ./clickhouse server --config-file="../$CLICKHOUSE_CONFIG_FILE"
-
-# Wait for server deployment
-sleep 10
-
-# Execute the command after server deployment
-./clickhouse client
