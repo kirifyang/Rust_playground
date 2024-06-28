@@ -1,19 +1,22 @@
 #!/bin/bash
 
 # Install ClickHouse
-if [ ! -f clickhouse ]; then
-    mkdir clickhouse
+if [ -d "clickhouse" ]; then
+    killall clickhouse
+    echo "ClickHouse already installed. Starting server..."
+    sleep 3
+    ./clickhouse/clickhouse server --config-file=clickhouse_config.xml
+    exit 0
 fi
+mkdir clickhouse && cd clickhouse
+curl https://clickhouse.com/ | sh
 
-cd clickhouse
+# Set environment
 
-if [ ! -f clickhouse ]; then
-    curl https://clickhouse.com/ | sh
-fi
+mkdir click_data && cd click_data
+mkdir user_files
 
-export CLICKHOUSE_CONFIG_FILE=clickhouse_config.xml
-echo $CLICKHOUSE_CONFIG_FILE
+echo "ClickHouse installed successfully! Starting server..."
+sleep 3
+../clickhouse server --config-file=../../clickhouse_config.xml
 
-killall clickhouse
-
-./clickhouse server --config-file="../$CLICKHOUSE_CONFIG_FILE"
