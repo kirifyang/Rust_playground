@@ -9,7 +9,7 @@
     <tcp_port>9000</tcp_port>
     <mysql_port>9004</mysql_port>
 
-    <path>.click_data/</path>
+    <path>../click_data/</path>
 
     <mlock_executable>true</mlock_executable>
 
