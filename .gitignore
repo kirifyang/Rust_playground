@@ -1,3 +1,4 @@
 target
 clickhouse
-db
+receive
+_archive
