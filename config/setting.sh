@@ -10,7 +10,6 @@ curl https://clickhouse.com/ | sh
 
 # Set environment
 
-mkdir click_data && cd click_data
-mkdir user_files
+mkdir -p clickhouse/click_data/user_files
 
 echo "ClickHouse installed successfully! "

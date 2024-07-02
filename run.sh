@@ -1,9 +1,13 @@
 #!/bin/bash
 
-CONFIG=config
+CONFIG_DIR=config
 
 # Run setting.sh
-source ./$CONFIG/setting.sh
-source ./$CONFIG/build_db.sh
+source ./$CONFIG_DIR/setting.sh
+if [ -z "$(ls -A ./clickhouse/click_data/user_files)" ]; then
+    source ./$CONFIG_DIR/build_db.sh
+    echo "Data downloaded successfully!"
+fi
 
-./clickhouse/clickhouse server --config-file=clickhouse_config.xml
+# Run clickhouse
+./clickhouse/clickhouse server --config-file=./$CONFIG_DIR/clickhouse_config.xml
