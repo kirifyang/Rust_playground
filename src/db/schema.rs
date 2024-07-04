@@ -1,6 +1,7 @@
 use klickhouse::{DateTime, Row};
+use serde::{Deserialize, Serialize};
 
-#[derive(Row, Debug, Default)]
+#[derive(Row, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Opensky {
     callsign: String,
     number: String,
