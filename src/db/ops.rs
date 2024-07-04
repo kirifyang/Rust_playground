@@ -4,11 +4,10 @@ use flate2::read::GzDecoder;
 use klickhouse::*;
 use std::fs::File;
 use std::io::Read;
-use std::sync::Arc;
-use tokio::{task, runtime::Runtime};
 
 const CLICKHOUSE_USER_FILE_PATH: &str = "./clickhouse/click_data/user_files";
 
+#[allow(dead_code)]
 pub async fn insert_table(client: &Client, table_name: &str, row: Vec<Opensky>) {
     let query = format!("INSERT INTO {} FORMAT native", table_name);
 
@@ -29,7 +28,7 @@ pub async fn create_table(client: &Client, table_name: &str, schema: &str) {
     client.execute(query).await.unwrap();
 }
 
-pub async fn insert_table_from_files(client:&Client, table_name:&str ) {
+pub async fn insert_table_from_files(client: &Client, table_name: &str) {
     let files = get_csvs_names_grouped_by_date(); // この関数も非同期にする必要があるかもしれません
 
     let mut tasks = vec![];
@@ -40,10 +39,12 @@ pub async fn insert_table_from_files(client:&Client, table_name:&str ) {
         let task = tokio::spawn(async move {
             println!("Processing file: {}", file);
             let file_path = format!("{}/{}", CLICKHOUSE_USER_FILE_PATH, file);
-            let mut file = File::open(&file_path).expect("Failed to open file");
+            let file = File::open(&file_path).expect("Failed to open file");
             let mut decoder = GzDecoder::new(file);
             let mut output_str = String::new();
-            decoder.read_to_string(&mut output_str).expect("Failed to read gzip file");
+            decoder
+                .read_to_string(&mut output_str)
+                .expect("Failed to read gzip file");
 
             let query = format!(
                 "INSERT INTO {} FORMAT CSVWithNames\n{}",

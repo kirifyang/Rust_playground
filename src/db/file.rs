@@ -7,7 +7,7 @@ use std::fs;
 use std::fs::File;
 use std::iter::Iterator;
 use std::path::Path;
-use futures;
+
 // use std::path::PathBuf;
 // use std::process::Command;
 
@@ -50,13 +50,13 @@ pub async fn split_table_by_day(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let query_max = format!("SELECT max(toDate(day)) FROM {}", table_name);
     let end_date_result: Vec<MaxDateRow> = client.query_collect(query_max).await?;
-    let end_date =
-        NaiveDate::from_ymd_opt(1970, 1, 1).unwrap() + Duration::days(end_date_result[0].max_date.0 as i64);
+    let end_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+        + Duration::days(end_date_result[0].max_date.0 as i64);
 
     let query_min = format!("SELECT min(toDate(day)) FROM {}", table_name);
     let start_date_result: Vec<MinDateRow> = client.query_collect(query_min).await?;
-    let start_date =
-        NaiveDate::from_ymd_opt(1970, 1, 1).unwrap() + Duration::days(start_date_result[0].min_date.0 as i64);
+    let start_date = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
+        + Duration::days(start_date_result[0].min_date.0 as i64);
 
     println!("Start date: {:?}", start_date);
     println!("End date: {:?}", end_date);
