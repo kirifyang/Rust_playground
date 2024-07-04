@@ -3,3 +3,5 @@ clickhouse
 receive
 _archive
 .idea
+tmp
+.ds_store

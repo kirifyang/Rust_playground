@@ -29,7 +29,6 @@ pub async fn create_table(client: &Client, table_name: &str, schema: &str) {
     client.execute(query).await.unwrap();
 }
 
-// need to improve this
 pub async fn insert_table_from_files(client:&Client, table_name:&str ) {
     let files = get_csvs_names_grouped_by_date(); // この関数も非同期にする必要があるかもしれません
 

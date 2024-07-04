@@ -1,6 +1,7 @@
 mod db;
 mod r#macro;
 
+use crate::db::file::*;
 use crate::db::ops::*;
 use crate::db::schema::*;
 use klickhouse::*;
@@ -40,34 +41,9 @@ async fn main() {
     let schema = Opensky::schema();
     create_table(&client, "Opensky", &schema).await;
     insert_table_from_files(&client, "Opensky").await;
+    println!("Table created and data inserted");
 
-    // let files = fs::read_dir("./clickhouse/click_data/user_files/")
-    //     .unwrap()
-    //     .filter_map(Result::ok)
-    //     .filter(|entry| {
-    //         let binding = entry.file_name();
-    //         let file_name_str = binding.to_string_lossy();
-    //         let file_name = file_name_str.as_ref();
-    //         // file_name.starts_with("flightlist_") && file_name.ends_with(".csv.gz")
-    //         // for testing purposes, only use the 20190131 file
-    //         file_name.starts_with("flightlist_") && file_name.ends_with("20190131.csv.gz")
-    //     })
-    //     .map(|entry| entry.path())
-    //     .collect::<Vec<_>>();
-
-    // for file in files {
-    //     let output = Command::new("gzip")
-    //         .arg("-c")
-    //         .arg("-d")
-    //         .arg(file.to_str().unwrap())
-    //         .output()
-    //         .unwrap();
-
-    //     let output_str = String::from_utf8_lossy(&output.stdout);
-    //     let query = format!("INSERT INTO Opensky FORMAT CSVWithNames\n{}", output_str);
-
-    //     client.execute(&query).await.unwrap();
-    // }
+    split_table_by_day(&client, "Opensky").await.unwrap();
 
     drop(client);
     progress_task.await.unwrap();
