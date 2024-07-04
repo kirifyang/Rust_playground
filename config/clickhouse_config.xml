@@ -1,4 +1,4 @@
-<!-- Config that is used when server is run without config file. -->
+<!-- Config that is used when server is run without config _file. -->
 <clickhouse>
     <logger>
         <level>trace</level>
