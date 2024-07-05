@@ -1,14 +1,21 @@
 mod db;
+mod job;
 mod r#macro;
 
 use crate::db::file::*;
 use crate::db::ops::*;
 use crate::db::schema::*;
 use klickhouse::*;
+use serde::__private::de::Content::I8;
 use std::time::Duration;
+use tokio::time::sleep;
+// use dotenv::dotenv;
+// use std::env;
 
 #[tokio::main]
 async fn main() {
+    // dotenv().ok();
+    // let clickhouse_host = env::var("LOCAL_CLICKHOUSE_CONNECT").unwrap_or_else(|_| "http://localhost:8123".to_string());
     let client = tokio::time::timeout(
         Duration::from_secs(10),
         Client::connect("127.0.0.1:9000", ClientOptions::default()),
@@ -16,6 +23,11 @@ async fn main() {
     .await
     .unwrap_or_else(|err| panic!("Failed to connect to ClickHouse: {}", err))
     .unwrap_or_else(|_| panic!("Failed to connect to ClickHouse: timeout"));
+    println!("Connected to ClickHouse");
+
+    sleep(Duration::from_secs(1)).await;
+
+    println!("Creating table and inserting data");
     let mut progress = client.subscribe_progress();
     let progress_task = tokio::task::spawn(async move {
         let mut current_query = Uuid::nil();
@@ -38,12 +50,21 @@ async fn main() {
         }
     });
 
-    let schema = Opensky::schema();
-    create_table(&client, "Opensky", &schema).await;
-    insert_table_from_files(&client, "Opensky").await;
+    // let schema = Opensky::schema();
+    create_table(&client, Opensky::table_name(), Opensky::schema(), Opensky::columns().find("day")).await;
+    // insert_table_from_files(&client, Opensky::table_name()).await;
+    // create_job_table(
+    //     &client,
+    //     IntergrationJob::table_name(),
+    //     IntergrationJob::schema(),
+    // )
+    // .await;
     println!("Table created and data inserted");
 
-    split_table_by_day(&client, "Opensky").await.unwrap();
+    sleep(Duration::from_secs(3)).await;
+
+    // println!("Splitting table by day");
+    // split_table_by_day(&client, Opensky::table_name()).await.unwrap();
 
     drop(client);
     progress_task.await.unwrap();

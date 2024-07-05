@@ -1,4 +1,4 @@
-use crate::db::schema::Opensky;
+use crate::db::schema::{Opensky, MaxDateRow, MinDateRow};
 use chrono::{Duration, NaiveDate};
 use csv::Writer;
 use klickhouse::{Client, Date, Row};
@@ -10,17 +10,6 @@ use std::path::Path;
 
 // use std::path::PathBuf;
 // use std::process::Command;
-
-#[derive(Debug, Deserialize, Row)]
-struct MaxDateRow {
-    #[serde(rename = "max(toDate(day))")]
-    max_date: Date,
-}
-#[derive(Debug, Deserialize, Row)]
-struct MinDateRow {
-    #[serde(rename = "min(toDate(day))")]
-    min_date: Date,
-}
 
 const CLICKHOUSE_USER_FILE_PATH: &str = "./clickhouse/click_data/user_files";
 const PREFIX: &str = "flightlist_";

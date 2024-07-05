@@ -4,7 +4,10 @@ use flate2::read::GzDecoder;
 use klickhouse::*;
 use std::fs::File;
 use std::io::Read;
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
 
@@ -25,7 +28,29 @@ pub async fn drop_table(client: &Client, table_name: &str) {
     client.execute(query).await.unwrap();
 }
 
-pub async fn create_table(client: &Client, table_name: &str, schema: &str) {
+// to implement this prototype at a later time.
+
+// pub fn find_target_column(table_name: db::schema, target: &str) -> String {
+//     match table_name::columns().iter().position(|x| x == target) {
+//         Some(i) => Opensky::columns()[i].clone(),
+//         None => err("No such column!"), 
+//     }
+// }
+
+// macro_rules! create_table {
+//     ($client:ident, $table_name:ident, $schema:ident, $type:ident) => {
+//         drop_table($client, $table_name).await;
+//         let query = format!(
+//             "CREATE TABLE {} ({}) ENGINE = MergeTree() ORDER BY {}",
+//             $table_name,
+//             $schema
+//             $
+//         );
+//         $client.execute(query).await.unwrap();
+//     };
+// }
+
+pub async fn create_table(client: &Client, table_name: &str, schema: String) {
     drop_table(client, table_name).await;
     let query = format!(
         "CREATE TABLE {} ({}) ENGINE = MergeTree() ORDER BY (origin, destination, callsign)",
@@ -34,8 +59,18 @@ pub async fn create_table(client: &Client, table_name: &str, schema: &str) {
     client.execute(query).await.unwrap();
 }
 
+pub async fn create_job_table(client: &Client, table_name: &str, schema: String) {
+    drop_table(client, table_name).await;
+    let query = format!(
+        "CREATE TABLE {} ({}) ENGINE = MergeTree() ORDER BY (integration_job_id)",
+        table_name, schema
+    );
+    client.execute(query).await.unwrap();
+}
+
+
 pub async fn insert_table_from_files(client: &Client, table_name: &str) {
-    let files = get_csvs_names_grouped_by_date(); 
+    let files = get_csvs_names_grouped_by_date();
 
     let semaphore = Arc::new(Semaphore::new(TASK_SEMAPHORE_LIMIT));
     let completed_tasks = Arc::new(AtomicUsize::new(0));
@@ -47,7 +82,10 @@ pub async fn insert_table_from_files(client: &Client, table_name: &str) {
         let semaphore_clone = semaphore.clone();
         let completed_clone = completed_tasks.clone();
         let task = tokio::spawn(async move {
-            let _permit = semaphore_clone.acquire().await.expect("Failed to acquire semaphore permit");
+            let _permit = semaphore_clone
+                .acquire()
+                .await
+                .expect("Failed to acquire semaphore permit");
             sleep(Duration::from_secs(TASK_WAIT_TIME)).await;
             println!("Processing file: {}", file);
             let file_path = format!("{}/{}", CLICKHOUSE_USER_FILE_PATH, file);
@@ -67,7 +105,10 @@ pub async fn insert_table_from_files(client: &Client, table_name: &str) {
         });
         tasks.push(task);
         if completed_tasks.load(Ordering::SeqCst) % TASK_SEMAPHORE_LIMIT == 0 {
-            println!("Completed tasks: {}", completed_tasks.load(Ordering::SeqCst));
+            println!(
+                "Completed tasks: {}",
+                completed_tasks.load(Ordering::SeqCst)
+            );
         }
     }
 
