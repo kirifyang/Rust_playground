@@ -44,7 +44,7 @@ Project
   - [x] Query Data
 
 
-- [] Actix-web Server
+- [ ] Actix-web Server
 
 ## How to Use
 
