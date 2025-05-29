@@ -67,12 +67,14 @@ jobs:
           create_session() {
             local prompt="$1"
             echo "Creating new Devin session..."
-            local escaped_prompt=$(echo "$prompt" | jq -R -s .)
             local response
             response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/sessions" \
               -H "Authorization: Bearer $DEVIN_API_KEY" \
               -H "Content-Type: application/json" \
-              -d "{\"prompt\": $escaped_prompt}")
+              -d "{
+                \"prompt\": \"$prompt\",
+                \"playbook_id\": \"playbook-f5454a9ea542482e8805ec43bf8ab201\"
+              }")
             local http_status
             http_status=$(echo "$response" | tail -n 1)
             echo "Request info: status code = $http_status"
@@ -127,8 +129,32 @@ jobs:
             echo "Session updated successfully"
           }
 
-          # より詳細な指示を追加
-          instructions="Please review the changes in this Pull Request. Analyze the code for: 1. Potential bugs or issues 2. Code quality and best practices 3. Security concerns 4. Performance implications 5. Provide specific suggestions for improvement. Please respond in Japanese."
+          # より詳細で構造化された指示を追加
+          instructions=
+          
+          "Code Review Task:
+
+          このプルリクエストの包括的なコードレビューを実行してください。
+
+          リポジトリ: ${{ github.repository }}
+          PR番号: #${{ github.event.number }}
+          PRタイトル: ${{ github.event.pull_request.title }}
+
+          レビュー重点項目:
+          1. コード品質: コードスタイル、可読性、保守性をチェック
+          2. バグ検出: 潜在的なバグ、ロジックエラー、エッジケースを特定
+          3. セキュリティ分析: セキュリティ脆弱性や安全でない慣行を確認
+          4. パフォーマンス: 変更のパフォーマンスへの影響を評価
+          5. ベストプラクティス: 言語固有のベストプラクティスへの準拠を確認
+          6. ドキュメント: 変更にドキュメント更新が必要かチェック
+
+          以下を提供してください:
+          - 該当する場合は行ごとの具体的なフィードバック
+          - 変更の全体的な評価
+          - 改善提案
+          - リスク評価（低/中/高）
+
+          日本語で回答し、分析を徹底的に行ってください。"
 
           if [ -z "$session_comment" ]; then
             create_session "$instructions"
