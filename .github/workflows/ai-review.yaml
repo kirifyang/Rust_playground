@@ -181,11 +181,7 @@ jobs:
           
           echo "Found session ID: $session_id"
           
-          # 初回1分待機
-          echo "Initial wait: 60 seconds before first attempt..."
-          sleep 60
-          
-          # より長い待機時間での結果取得（3回の試行、各60秒待機）
+          # 3回の試行、各60秒待機
           max_attempts=3
           wait_time=60
           
@@ -193,7 +189,7 @@ jobs:
             echo "Attempt $i/$max_attempts..."
             
             # メッセージを取得
-            response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}/messages" \
+            response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}" \
               -H "Authorization: Bearer ${{ secrets.DEVIN_API_KEY }}")
             
             if [ $? -eq 0 ] && [ -n "$response" ]; then
