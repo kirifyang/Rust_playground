@@ -16,14 +16,28 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
+      - name: Check PR body for devin-review
+        run: |
+          echo "PR body: ${{ github.event.pull_request.body }}"
+          echo "Contains devin-review: ${{ contains(github.event.pull_request.body, 'devin-review') }}"
+
       - name: Devin review combined
         if: contains(github.event.pull_request.body, 'devin-review')
         run: |
+          echo "Starting Devin review process..."
+          
+          # GitHub CLIが利用可能か確認
+          if ! command -v gh &> /dev/null; then
+            echo "GitHub CLI not found"
+            exit 1
+          fi
+          
           # セッションIDの抽出を修正
           session_comment=$(gh pr view "${{ github.event.number }}" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | head -n 1)
 
           create_session() {
             local prompt="$1"
+            echo "Creating new Devin session..."
             local response
             response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/sessions" \
               -H "Authorization: Bearer $DEVIN_API_KEY" \
@@ -44,12 +58,14 @@ jobs:
               echo "Failed to get session ID, body = $http_body"
               exit 1
             fi
+            echo "Session created with ID: $session_id"
             gh pr comment "${{ github.event.number }}" --body "Devin Session ID: $session_id"
           }
 
           update_session() {
             local session_id="$1"
             local message="$2"
+            echo "Updating Devin session: $session_id"
             local response
             response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/session/${session_id}/message" \
               -H "Authorization: Bearer $DEVIN_API_KEY" \
@@ -62,6 +78,7 @@ jobs:
               echo "Failed to update session: $response"
               exit 1
             fi
+            echo "Session updated successfully"
           }
 
           instructions="【レビュー時の指示】
@@ -84,9 +101,9 @@ jobs:
   slack-notification:
     runs-on: ubuntu-latest
     needs: code-review
-    if: contains(github.event.pull_request.body, 'devin-review')
+    if: contains(github.event.pull_request.body, 'devin-review') && always()
     env:
-      SLACK_WEBHOOK_URL: ${{ secrets.SLCAK_SELF_CHANNEL }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}  # スペルミスを修正
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v3
@@ -94,6 +111,8 @@ jobs:
       - name: Get Devin session results
         id: get-results
         run: |
+          echo "Getting Devin session results..."
+          
           # Webhook URLの存在確認
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
             echo "SLACK_WEBHOOK_URL is not set"
@@ -106,57 +125,85 @@ jobs:
           
           if [ -z "$session_id" ]; then
             echo "Failed to extract session ID"
-            exit 1
+            # Slack通知のためにデフォルトメッセージを設定
+            echo "results=Devin session not found or failed to start" >> $GITHUB_OUTPUT
+            exit 0
           fi
           
-          # セッション結果の取得
-          response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}/messages" \
-            -H "Authorization: Bearer ${{ secrets.DEVIN_API_KEY }}")
+          echo "Found session ID: $session_id"
           
-          if [ $? -ne 0 ]; then
-            echo "Failed to get session results"
-            exit 1
-          fi
+          # セッション結果の取得（リトライ機能付き）
+          for i in {1..3}; do
+            echo "Attempt $i to get session results..."
+            response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}/messages" \
+              -H "Authorization: Bearer ${{ secrets.DEVIN_API_KEY }}")
+            
+            if [ $? -eq 0 ] && [ -n "$response" ]; then
+              break
+            fi
+            
+            if [ $i -eq 3 ]; then
+              echo "Failed to get session results after 3 attempts"
+              echo "results=Failed to retrieve Devin session results" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
+            sleep 5
+          done
           
-          # JSONエスケープ処理を追加
-          results=$(echo "$response" | jq -r '.messages[-1].content // "No results available"' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
+          # JSONパースとエスケープ処理
+          results=$(echo "$response" | jq -r '.messages[-1].content // "No results available"')
           
-          echo "results<<EOF" >> $GITHUB_OUTPUT
-          echo "$results" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # マルチライン出力の安全な設定
+          {
+            echo "results<<EOF"
+            echo "$results"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Send to Slack
         run: |
-          # JSONペイロードをファイルに保存してエスケープ問題を回避
-          cat > slack_payload.json << EOF
-          {
-            "text": "Devin AI Code Review Results for PR #${{ github.event.number }}",
-            "blocks": [
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "*PR:* <${{ github.event.pull_request.html_url }}|#${{ github.event.number }} - ${{ github.event.pull_request.title }}>"
-                }
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "*Devin AI Review:*\n\`\`\`${{ steps.get-results.outputs.results }}\`\`\`"
-                }
-              }
-            ]
-          }
-          EOF
+          echo "Sending notification to Slack..."
           
-          curl -X POST -H 'Content-type: application/json' \
+          # JSONペイロードを安全に作成
+          jq -n \
+            --arg text "Devin AI Code Review Results for PR #${{ github.event.number }}" \
+            --arg pr_url "${{ github.event.pull_request.html_url }}" \
+            --arg pr_number "${{ github.event.number }}" \
+            --arg pr_title "${{ github.event.pull_request.title }}" \
+            --arg results "${{ steps.get-results.outputs.results }}" \
+            '{
+              text: $text,
+              blocks: [
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: ("*PR:* <" + $pr_url + "|#" + $pr_number + " - " + $pr_title + ">")
+                  }
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: ("*Devin AI Review:*\n```\n" + $results + "\n```")
+                  }
+                }
+              ]
+            }' > slack_payload.json
+          
+          # Slack APIへの送信
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            -H 'Content-type: application/json' \
             --data @slack_payload.json \
-            $SLACK_WEBHOOK_URL
+            "$SLACK_WEBHOOK_URL")
           
-          if [ $? -eq 0 ]; then
+          http_status=$(echo "$response" | tail -n 1)
+          
+          if [ "$http_status" -eq 200 ]; then
             echo "Slack notification sent successfully"
           else
-            echo "Failed to send Slack notification"
+            echo "Failed to send Slack notification. Status: $http_status"
+            echo "Response: $(echo "$response" | sed '$d')"
             exit 1
           fi
