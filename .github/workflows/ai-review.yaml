@@ -342,7 +342,7 @@ jobs:
                       elements: [
                         {
                           type: "mrkdwn",
-                          text: "🔗 <" + $pr_url + "|View Pull Request> | 🤖 Powered by Devin AI"
+                          text: ("🔗 <" + $pr_url + "|View Pull Request> | 🤖 Powered by Devin AI")
                         }
                       ]
                     }
