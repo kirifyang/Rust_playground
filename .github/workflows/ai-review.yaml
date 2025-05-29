@@ -124,29 +124,7 @@ jobs:
           }
 
           # より詳細で構造化された指示
-          instructions="Code Review Task:
-
-Please perform a comprehensive code review of this Pull Request.
-
-Repository: ${{ github.repository }}
-PR Number: #${{ github.event.number }}
-PR Title: ${{ github.event.pull_request.title }}
-
-Review Focus Areas:
-1. Code Quality: Check for code style, readability, and maintainability
-2. Bug Detection: Identify potential bugs, logic errors, or edge cases
-3. Security Analysis: Look for security vulnerabilities or unsafe practices
-4. Performance: Evaluate performance implications of the changes
-5. Best Practices: Ensure adherence to language-specific best practices
-6. Documentation: Check if changes need documentation updates
-
-Please provide:
-- Specific line-by-line feedback where applicable
-- Overall assessment of the changes
-- Suggestions for improvement
-- Risk assessment (Low/Medium/High)
-
-Respond in Japanese and be thorough in your analysis."
+          instructions="Code Review Task: Please perform a comprehensive code review of this Pull Request. Repository: ${{ github.repository }}, PR Number: #${{ github.event.number }}, PR Title: ${{ github.event.pull_request.title }}. Review Focus Areas: 1. Code Quality: Check for code style, readability, and maintainability 2. Bug Detection: Identify potential bugs, logic errors, or edge cases 3. Security Analysis: Look for security vulnerabilities or unsafe practices 4. Performance: Evaluate performance implications of the changes 5. Best Practices: Ensure adherence to language-specific best practices 6. Documentation: Check if changes need documentation updates. Please provide: - Specific line-by-line feedback where applicable - Overall assessment of the changes - Suggestions for improvement - Risk assessment (Low/Medium/High). Respond in Japanese and be thorough in your analysis."
 
           if [ -z "$session_comment" ]; then
             create_session "$instructions"
