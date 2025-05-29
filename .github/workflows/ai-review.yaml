@@ -124,7 +124,7 @@ jobs:
           }
 
           # 更新指示内容
-          instructions="指示: ${{ github.repository }}の Pull Request #${{ github.event.number }} をレビューしてください。レビューでは以下を行ってください: 1. Pull Requestの変更点を確認し、コードの品質、バグ、セキュリティの問題がないかを確認する 2. 変更内容のサマリと、潜在的な問題点や改善点を簡潔にまとめてください 3. 特に重要な問題がある場合は、具体的な修正提案を含めてください。制約事項: すべてのコメントは日本語で行ってください。簡潔で要点を絞ったレビューを心がけてください。重大な問題がない場合も、改善提案があれば記載してください。"
+          instructions="指示: ${{ github.repository }}の Pull Request #${{ github.event.number }} をレビューしてください。レビューでは以下を行ってください: 1. Pull Requestの変更点を確認し、コードの品質、バグ、セキュリティの問題がないかを確認する 2. 変更内容のサマリと、潜在的な問題点や改善点を簡潔にまとめてください 3. 特に重要な問題がある場合は、具体的な修正提案を含めてください。制約事項: すべてのコメントは日本語で行ってください。簡潔で要点を絞ったレビューを心がけてください。重大な問題がない場合も、改善提案があれば記載してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果」という標題を付けてください。"
 
           if [ -z "$session_comment" ]; then
             # 初回の場合は新セッションを作成（全コミットをレビュー）
@@ -144,7 +144,7 @@ jobs:
             # セッションが完了済みの場合は最新コミットのレビューを依頼
             if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
               echo "Session completed, will use existing results for latest commit review"
-              latest_commit_instruction="最新のコミット ${{ github.event.pull_request.head.sha }} の変更点について追加レビューをお願いします。前回のレビューに加えて、新しい変更点があれば指摘してください。"
+              latest_commit_instruction="最新のコミット ${{ github.event.pull_request.head.sha }} の変更点について追加レビューをお願いします。前回のレビューに加えて、新しい変更点があれば指摘してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）」という標題を付けてください。"
               create_session "$latest_commit_instruction"
             elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
               echo "Session is still running, will wait for results..."
@@ -186,8 +186,13 @@ jobs:
           
           echo "Found session ID: $session_id"
           
-          # より効率的な結果取得（最大10回、各15秒）
-          max_attempts=10
+          # 初回1分待機
+          echo "Initial wait: 60 seconds before first attempt..."
+          sleep 60
+          
+          # より長い待機時間での結果取得（3回の試行、各60秒待機）
+          max_attempts=3
+          wait_time=60
           
           for i in $(seq 1 $max_attempts); do
             echo "Attempt $i/$max_attempts..."
@@ -198,35 +203,51 @@ jobs:
             
             if [ $? -eq 0 ] && [ -n "$response" ]; then
               message_count=$(echo "$response" | jq '.messages | length' 2>/dev/null || echo "0")
+              echo "Found $message_count messages"
               
               if [ "$message_count" -gt 1 ]; then
                 last_message=$(echo "$response" | jq -r '.messages[-1].content // ""')
                 last_author=$(echo "$response" | jq -r '.messages[-1].author // ""')
                 
-                # Devinからの回答があるかチェック（100文字以上で十分）
+                echo "Last message author: $last_author"
+                echo "Last message length: ${#last_message}"
+                
+                # Devinからの回答があるかチェック（標題が含まれているかも確認）
                 if [ "$last_author" = "devin" ] && [ ${#last_message} -gt 100 ]; then
-                  echo "Found Devin response (${#last_message} characters)"
-                  break
+                  # 特定の標題フォーマットが含まれているかチェック
+                  if [[ "$last_message" =~ "レビュー結果" ]]; then
+                    echo "Found Devin response with proper title format (${#last_message} characters)"
+                    break
+                  else
+                    echo "Found Devin response but missing title format, will continue waiting..."
+                  fi
                 fi
               fi
             fi
             
-            if [ $i -eq $max_attempts ]; then
-              echo "Max attempts reached, using best available response"
-              break
+            # 最後の試行でない場合は待機
+            if [ $i -lt $max_attempts ]; then
+              echo "Waiting $wait_time seconds before next attempt..."
+              sleep $wait_time
+            else
+              echo "Max attempts reached"
+              # 最後でも使える回答があれば使用
+              if [ "$last_author" = "devin" ] && [ ${#last_message} -gt 50 ]; then
+                echo "Using best available response from Devin"
+                break
+              fi
             fi
-            
-            sleep 15
           done
           
           # 最適なメッセージを選択
           results=$(echo "$response" | jq -r '
             .messages 
             | map(select(.author == "devin" and .content != null and (.content | length) > 50))
-            | if length > 0 then .[-1].content else "Devin分析中..." end
+            | if length > 0 then .[-1].content else "Devin分析中... セッションID: '$session_id'" end
           ')
           
           echo "Final results length: ${#results}"
+          echo "Results preview: ${results:0:200}..."
           
           {
             echo "results<<EOF"
