@@ -123,25 +123,30 @@ jobs:
             echo "Session updated successfully"
           }
 
-          # より詳細で構造化された指示
-          instructions="Code Review Task: Please perform a comprehensive code review of this Pull Request. Repository: ${{ github.repository }}, PR Number: #${{ github.event.number }}, PR Title: ${{ github.event.pull_request.title }}. Review Focus Areas: 1. Code Quality: Check for code style, readability, and maintainability 2. Bug Detection: Identify potential bugs, logic errors, or edge cases 3. Security Analysis: Look for security vulnerabilities or unsafe practices 4. Performance: Evaluate performance implications of the changes 5. Best Practices: Ensure adherence to language-specific best practices 6. Documentation: Check if changes need documentation updates. Please provide: - Specific line-by-line feedback where applicable - Overall assessment of the changes - Suggestions for improvement - Risk assessment (Low/Medium/High). Respond in Japanese and be thorough in your analysis."
+          # 简化的指令
+          instructions="Please review this PR code changes. Focus on bugs, security, and improvements. Respond in Japanese briefly."
 
           if [ -z "$session_comment" ]; then
             create_session "$instructions"
           else
-            # セッションID抽出の修正
+            # セッションID抽出
             session_id=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
             if [ -z "$session_id" ]; then
               echo "Failed to extract session ID from comment: $session_comment"
               exit 1
             fi
             
-            # 既存セッションがある場合でも、まず状態をチェック
+            # 既存セッションの状態をチェック
             session_status=$(check_session_status "$session_id")
-            if [ "$session_status" = "exited" ] || [ "$session_status" = "completed" ]; then
-              echo "Previous session has completed. Creating new session..."
-              create_session "$instructions"
+            echo "Existing session status: $session_status"
+            
+            # セッションが実行中または完了済みの場合は新しいメッセージを送らず、結果を待つ
+            if [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
+              echo "Session is still running, will wait for results..."
+            elif [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
+              echo "Session already completed, will get existing results..."
             else
+              echo "Session status unclear, sending new message..."
               update_session "$session_id" "$instructions"
             fi
           fi
@@ -161,128 +166,65 @@ jobs:
         run: |
           echo "Getting Devin session results..."
           
-          # Webhook URLの存在確認
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
             echo "SLACK_WEBHOOK_URL is not set"
             exit 1
           fi
           
-          # セッションIDの取得を修正 - 最新のコメントを取得
+          # 最新のセッションIDを取得
           session_comment=$(gh pr view "${{ github.event.number }}" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | tail -n 1)
           session_id=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
           
           if [ -z "$session_id" ]; then
             echo "Failed to extract session ID"
-            echo "results=Devin session not found or failed to start" >> $GITHUB_OUTPUT
+            echo "results=Devin session not found" >> $GITHUB_OUTPUT
             exit 0
           fi
           
           echo "Found session ID: $session_id"
           
-          # セッション結果の取得（より長い待機時間とより詳細な状態チェック）
-          max_attempts=20
-          wait_time=30
+          # より効率的な結果取得（最大10回、各15秒）
+          max_attempts=10
           
           for i in $(seq 1 $max_attempts); do
-            echo "Attempt $i/$max_attempts to get session results..."
-            
-            # セッション状態を確認
-            status_response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}" \
-              -H "Authorization: Bearer ${{ secrets.DEVIN_API_KEY }}")
-            session_status=$(echo "$status_response" | jq -r '.status // "unknown"')
-            echo "Session status: $session_status"
+            echo "Attempt $i/$max_attempts..."
             
             # メッセージを取得
             response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}/messages" \
               -H "Authorization: Bearer ${{ secrets.DEVIN_API_KEY }}")
             
             if [ $? -eq 0 ] && [ -n "$response" ]; then
-              # メッセージ数とコンテンツをチェック
               message_count=$(echo "$response" | jq '.messages | length' 2>/dev/null || echo "0")
-              echo "Found $message_count messages"
               
               if [ "$message_count" -gt 1 ]; then
-                # 最後のメッセージの内容とauthorをチェック
                 last_message=$(echo "$response" | jq -r '.messages[-1].content // ""')
                 last_author=$(echo "$response" | jq -r '.messages[-1].author // ""')
                 
-                echo "Last message author: $last_author"
-                echo "Last message length: ${#last_message}"
-                echo "Last message preview: ${last_message:0:100}..."
-                
-                # Devinからの実質的な回答があるかチェック
-                # 1. authorがdevinであること
-                # 2. メッセージが十分長いこと（200文字以上）
-                # 3. 明らかなエラーメッセージでないこと
-                if [ "$last_author" = "devin" ] && [ ${#last_message} -gt 200 ] && \
-                   [[ ! "$last_message" =~ "エラー"|"error"|"failed"|"問題が発生" ]]; then
-                  echo "Found meaningful response from Devin (${#last_message} characters)"
+                # Devinからの回答があるかチェック（100文字以上で十分）
+                if [ "$last_author" = "devin" ] && [ ${#last_message} -gt 100 ]; then
+                  echo "Found Devin response (${#last_message} characters)"
                   break
                 fi
-                
-                # セッションが完了しているが、まだ十分な回答がない場合
-                if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
-                  if [ ${#last_message} -gt 50 ]; then
-                    echo "Session completed with some response (${#last_message} characters)"
-                    break
-                  else
-                    echo "Session completed but response too short, waiting a bit more..."
-                  fi
-                fi
               fi
             fi
             
-            # 待機時間の調整
-            if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
-              # セッションが完了している場合は短い間隔で再試行
-              echo "Session completed/exited, checking again in 10 seconds..."
-              sleep 10
-            elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
-              # セッションが実行中の場合は長めに待機
-              echo "Session still running, waiting $wait_time seconds..."
-              sleep $wait_time
-            else
-              # 不明な状態の場合は中間の待機時間
-              echo "Unknown session status, waiting 15 seconds..."
-              sleep 15
-            fi
-            
-            # 最後の試行の場合
             if [ $i -eq $max_attempts ]; then
-              echo "Reached maximum attempts ($max_attempts)"
-              if [ -n "$last_message" ] && [ ${#last_message} -gt 20 ]; then
-                echo "Using last available message"
-                break
-              else
-                echo "No meaningful response found after $max_attempts attempts"
-                echo "Session status: $session_status"
-                echo "Message count: $message_count"
-                echo "results=Devin AI分析が完了していません。セッション状態: $session_status。しばらく後に再度確認してください。" >> $GITHUB_OUTPUT
-                exit 0
-              fi
+              echo "Max attempts reached, using best available response"
+              break
             fi
+            
+            sleep 15
           done
           
-          # 最適なメッセージを選択（Devinからの最長の回答を優先）
+          # 最適なメッセージを選択
           results=$(echo "$response" | jq -r '
             .messages 
             | map(select(.author == "devin" and .content != null and (.content | length) > 50))
-            | if length > 0 then 
-                sort_by(.content | length) | .[-1].content
-              else 
-                (.messages | map(select(.content != null and (.content | length) > 20)) | if length > 0 then .[-1].content else "応答を処理中です。" end)
-              end
+            | if length > 0 then .[-1].content else "Devin分析中..." end
           ')
           
           echo "Final results length: ${#results}"
-          echo "Results preview: ${results:0:200}..."
           
-          # 結果が空または短すぎる場合のフォールバック
-          if [ -z "$results" ] || [ ${#results} -lt 20 ]; then
-            results="Devin AIからの詳細な分析結果を待機中です。セッション ID: $session_id"
-          fi
-          
-          # マルチライン出力の安全な設定
           {
             echo "results<<EOF"
             echo "$results"
