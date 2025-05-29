@@ -123,30 +123,47 @@ jobs:
             echo "Session updated successfully"
           }
 
-          # 简化的指令
-          instructions="Please review this PR code changes. Focus on bugs, security, and improvements. Respond in Japanese briefly."
+          # 更新指示内容
+          instructions="# 指示
+
+${{ github.repository }}の Pull Request #${{ github.event.number }} をレビューしてください。
+
+レビューでは、以下の作業を行ってください。
+
+1. Pull Requestの変更点を確認し、コードの品質、バグ、セキュリティの問題がないかを確認する
+2. 変更内容のサマリと、潜在的な問題点や改善点を簡潔にまとめてください
+3. 特に重要な問題がある場合は、具体的な修正提案を含めてください
+
+# 制約事項
+
+* すべてのコメントは日本語で行ってください
+* 簡潔で要点を絞ったレビューを心がけてください
+* 重大な問題がない場合も、改善提案があれば記載してください"
 
           if [ -z "$session_comment" ]; then
+            # 初回の場合は新セッションを作成（全コミットをレビュー）
+            echo "No existing session found, creating new session for full PR review"
             create_session "$instructions"
           else
-            # セッションID抽出
+            # 既存セッションがある場合
             session_id=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
             if [ -z "$session_id" ]; then
               echo "Failed to extract session ID from comment: $session_comment"
               exit 1
             fi
             
-            # 既存セッションの状態をチェック
             session_status=$(check_session_status "$session_id")
             echo "Existing session status: $session_status"
             
-            # セッションが実行中または完了済みの場合は新しいメッセージを送らず、結果を待つ
-            if [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
+            # セッションが完了済みの場合は最新コミットのレビューを依頼
+            if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
+              echo "Session completed, will use existing results for latest commit review"
+              latest_commit_instruction="最新のコミット ${{ github.event.pull_request.head.sha }} の変更点について追加レビューをお願いします。前回のレビューに加えて、新しい変更点があれば指摘してください。"
+              create_session "$latest_commit_instruction"
+            elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
               echo "Session is still running, will wait for results..."
-            elif [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
-              echo "Session already completed, will get existing results..."
             else
-              echo "Session status unclear, sending new message..."
+              echo "Session status unclear, sending review request..."
               update_session "$session_id" "$instructions"
             fi
           fi
