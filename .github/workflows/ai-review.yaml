@@ -42,6 +42,19 @@ jobs:
           # セッションIDの抽出を修正
           session_comment=$(gh pr view "${{ github.event.number }}" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | head -n 1)
 
+          check_session_status() {
+            local session_id="$1"
+            echo "Checking session status: $session_id"
+            local response
+            response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}" \
+              -H "Authorization: Bearer $DEVIN_API_KEY")
+            
+            local status
+            status=$(echo "$response" | jq -r '.status // "unknown"')
+            echo "Session status: $status"
+            echo "$status"
+          }
+
           create_session() {
             local prompt="$1"
             echo "Creating new Devin session..."
@@ -51,7 +64,7 @@ jobs:
               -H "Authorization: Bearer $DEVIN_API_KEY" \
               -H "Content-Type: application/json" \
               -d "{
-                \"prompt\": \"$escaped_prompt\",
+                \"prompt\": $escaped_prompt,
                 \"playbook_id\": \"playbook-f5454a9ea542482e8805ec43bf8ab201\"
               }")
             local http_status
@@ -77,6 +90,17 @@ jobs:
             local session_id="$1"
             local message="$2"
             echo "Updating Devin session: $session_id"
+            
+            # まずセッションの状態を確認
+            local session_status
+            session_status=$(check_session_status "$session_id")
+            
+            if [ "$session_status" = "exited" ] || [ "$session_status" = "completed" ]; then
+              echo "Session has already exited/completed. Creating new session instead."
+              create_session "$message"
+              return 0
+            fi
+            
             local escaped_message=$(echo "$message" | jq -R -s .)
             local response
             response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/session/${session_id}/message" \
@@ -88,13 +112,41 @@ jobs:
             echo "Request info: status code = $http_status"
             if [ "$http_status" -ne 200 ]; then
               echo "Failed to update session: $response"
+              # セッションが既に終了している場合は新しいセッションを作成
+              if [[ "$response" == *"already exited"* ]]; then
+                echo "Session already exited, creating new session..."
+                create_session "$message"
+                return 0
+              fi
               exit 1
             fi
             echo "Session updated successfully"
           }
 
-          # 改行文字を含む指示を単一行に変更
-          instructions="レビュー時の指示: 1. コードの変更点を確認してください。2. 潜在的なバグや改善点を指摘してください。3. コーディング規約に従っているか確認してください。"
+          # より詳細で構造化された指示
+          instructions="Code Review Task:
+
+Please perform a comprehensive code review of this Pull Request.
+
+Repository: ${{ github.repository }}
+PR Number: #${{ github.event.number }}
+PR Title: ${{ github.event.pull_request.title }}
+
+Review Focus Areas:
+1. Code Quality: Check for code style, readability, and maintainability
+2. Bug Detection: Identify potential bugs, logic errors, or edge cases
+3. Security Analysis: Look for security vulnerabilities or unsafe practices
+4. Performance: Evaluate performance implications of the changes
+5. Best Practices: Ensure adherence to language-specific best practices
+6. Documentation: Check if changes need documentation updates
+
+Please provide:
+- Specific line-by-line feedback where applicable
+- Overall assessment of the changes
+- Suggestions for improvement
+- Risk assessment (Low/Medium/High)
+
+Respond in Japanese and be thorough in your analysis."
 
           if [ -z "$session_comment" ]; then
             create_session "$instructions"
@@ -105,7 +157,15 @@ jobs:
               echo "Failed to extract session ID from comment: $session_comment"
               exit 1
             fi
-            update_session "$session_id" "$instructions"
+            
+            # 既存セッションがある場合でも、まず状態をチェック
+            session_status=$(check_session_status "$session_id")
+            if [ "$session_status" = "exited" ] || [ "$session_status" = "completed" ]; then
+              echo "Previous session has completed. Creating new session..."
+              create_session "$instructions"
+            else
+              update_session "$session_id" "$instructions"
+            fi
           fi
           
   slack-notification:
