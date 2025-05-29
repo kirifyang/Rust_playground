@@ -2,7 +2,7 @@ name: Devin Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, edited]
+    types: [opened, synchronize]
 
 permissions:
   contents: read
@@ -121,7 +121,7 @@ jobs:
             echo "Session updated successfully"
           }
 
-          instructions="指示: ${{ github.repository }}の Pull Request #${{ github.event.number }} をレビューしてください。レビューでは以下を行ってください: 1. Pull Requestの変更点を確認し、コードの品質、バグ、セキュリティの問題がないかを確認する 2. 変更内容のサマリと、潜在的な問題点や改善点を簡潔にまとめてください 3. 特に重要な問題がある場合は、具体的な修正提案を含めてください。制約事項: すべてのコメントは日本語で行ってください。簡潔で要点を絞ったレビューを心がけてください。重大な問題がない場合も、改善提案があれば記載してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果」という標題を付けてください。"
+          instructions="指示: ${{ github.repository }}の Pull Request #${{ github.event.number }} をレビューしてください。レビューでは以下を行ってください: 1. Pull Requestの変更点を確認し、コードの品質、バグ、セキュリティの問題がないかを確認する 2. 変更内容のサマリと、潜在的な問題点や改善点を簡潔にまとめてください 3. 特に重要な問題がある場合は、具体的な修正提案を含めてください 4. レビュー結果をPull Requestにコメントとして投稿してください。制約事項: すべてのコメントは日本語で行ってください。簡潔で要点を絞ったレビューを心がけてください。重大な問題がない場合も、改善提案があれば記載してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果」という標題を付けてください。PRコメントも同様の内容で投稿してください。"
 
           if [ -z "$session_comment" ]; then
             # 初回の場合は新セッションを作成（全コミットをレビュー）
@@ -148,6 +148,10 @@ jobs:
               update_session "$session_id" "$instructions"
             fi
           fi
+          
+          # 最新のコミットについての追加レビューをリクエスト
+          latest_commit_instruction="最新のコミット ${{ github.event.pull_request.head.sha }} の変更点について追加レビューをお願いします。前回のレビューに加えて、新しい変更点があれば指摘してください。また、レビュー結果をPull Requestにコメントとして投稿してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）」という標題を付けてください。"
+          update_session "$session_id" "$latest_commit_instruction"
           
   slack-notification:
     runs-on: ubuntu-latest
