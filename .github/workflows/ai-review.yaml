@@ -202,27 +202,37 @@ jobs:
               -H "Authorization: Bearer ${{ secrets.DEVIN_API_KEY }}")
             
             if [ $? -eq 0 ] && [ -n "$response" ]; then
-              message_count=$(echo "$response" | jq '.messages | length' 2>/dev/null || echo "0")
-              echo "Found $message_count messages"
+              echo "Response received, checking for messages..."
               
-              if [ "$message_count" -gt 1 ]; then
-                last_message=$(echo "$response" | jq -r '.messages[-1].content // ""')
-                last_author=$(echo "$response" | jq -r '.messages[-1].author // ""')
+              # messagesフィールドが存在するかチェック
+              has_messages=$(echo "$response" | jq -r 'has("messages")' 2>/dev/null || echo "false")
+              
+              if [ "$has_messages" = "true" ]; then
+                # devin_messageタイプの最後のメッセージを取得
+                last_devin_message=$(echo "$response" | jq -r '
+                  .messages 
+                  | map(select(.type == "devin_message" and .message != null and (.message | length) > 100))
+                  | if length > 0 then .[-1].message else null end
+                ' 2>/dev/null)
                 
-                echo "Last message author: $last_author"
-                echo "Last message length: ${#last_message}"
-                
-                # Devinからの回答があるかチェック（標題が含まれているかも確認）
-                if [ "$last_author" = "devin" ] && [ ${#last_message} -gt 100 ]; then
-                  # 特定の標題フォーマットが含まれているかチェック
-                  if [[ "$last_message" =~ "レビュー結果" ]]; then
-                    echo "Found Devin response with proper title format (${#last_message} characters)"
+                if [ "$last_devin_message" != "null" ] && [ -n "$last_devin_message" ] && [ ${#last_devin_message} -gt 100 ]; then
+                  echo "Found devin message (${#last_devin_message} characters)"
+                  
+                  # レビュー結果の標題が含まれているかチェック
+                  if [[ "$last_devin_message" =~ "${{ github.repository }} PR #${{ github.event.number }} レビュー結果" ]]; then
+                    echo "Found complete review result with proper title format"
                     break
                   else
-                    echo "Found Devin response but missing title format, will continue waiting..."
+                    echo "Found devin message but missing expected title format, will continue waiting..."
                   fi
+                else
+                  echo "No valid devin message found yet"
                 fi
+              else
+                echo "No messages field found in response"
               fi
+            else
+              echo "Failed to get response or empty response"
             fi
             
             # 最後の試行でない場合は待機
@@ -232,22 +242,36 @@ jobs:
             else
               echo "Max attempts reached"
               # 最後でも使える回答があれば使用
-              if [ "$last_author" = "devin" ] && [ ${#last_message} -gt 50 ]; then
-                echo "Using best available response from Devin"
+              if [ "$last_devin_message" != "null" ] && [ -n "$last_devin_message" ] && [ ${#last_devin_message} -gt 50 ]; then
+                echo "Using best available devin message"
                 break
               fi
             fi
           done
           
-          # 最適なメッセージを選択
-          results=$(echo "$response" | jq -r '
-            .messages 
-            | map(select(.author == "devin" and .content != null and (.content | length) > 50))
-            | if length > 0 then .[-1].content else "Devin分析中... セッションID: '$session_id'" end
-          ')
+          # 最終的なメッセージを設定
+          if [ "$last_devin_message" != "null" ] && [ -n "$last_devin_message" ]; then
+            results="$last_devin_message"
+          else
+            # フォールバック: 最後のdevin_messageを取得（条件を緩和）
+            results=$(echo "$response" | jq -r '
+              if has("messages") then
+                .messages 
+                | map(select(.type == "devin_message" and .message != null))
+                | if length > 0 then .[-1].message else "Devin分析中... セッションID: '"$session_id"'" end
+              else
+                "Devin分析中... セッションID: '"$session_id"'"
+              end
+            ' 2>/dev/null || echo "Devin分析中... セッションID: $session_id")
+          fi
           
           echo "Final results length: ${#results}"
           echo "Results preview: ${results:0:200}..."
+          
+          # 結果が空またはnullの場合のフォールバック
+          if [ -z "$results" ] || [ "$results" = "null" ]; then
+            results="Devin分析中... セッションID: $session_id"
+          fi
           
           {
             echo "results<<EOF"
