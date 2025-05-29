@@ -1,0 +1,372 @@
+name: Devin Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    env:
+      DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check PR body for devin-review
+        run: |
+          echo "PR body: ${{ github.event.pull_request.body }}"
+          # devin-reviewを含む場合、または空白の場合（デフォルト）でもレビューを実行
+          echo "Contains devin-review: ${{ contains(github.event.pull_request.body, 'devin-review') || github.event.pull_request.body == '' }}"
+
+      - name: Devin review combined
+        # skip-reviewがない限り常に実行
+        if: "!contains(github.event.pull_request.body, 'skip-review')"
+        run: |
+          echo "Starting Devin review process..."
+          
+          # GitHub CLIが利用可能か確認
+          if ! command -v gh &> /dev/null; then
+            echo "GitHub CLI not found"
+            exit 1
+          fi
+          
+          # セッションIDの抽出を修正
+          session_comment=$(gh pr view "${{ github.event.number }}" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | head -n 1)
+
+          check_session_status() {
+            local session_id="$1"
+            echo "Checking session status: $session_id"
+            local response
+            response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}" \
+              -H "Authorization: Bearer $DEVIN_API_KEY")
+            
+            local status
+            status=$(echo "$response" | jq -r '.status // "unknown"')
+            echo "Session status: $status"
+            echo "$status"
+          }
+
+          create_session() {
+            local prompt="$1"
+            echo "Creating new Devin session..."
+            local escaped_prompt=$(echo "$prompt" | jq -R -s .)
+            local response
+            response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/sessions" \
+              -H "Authorization: Bearer $DEVIN_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"prompt\": $escaped_prompt,
+                \"playbook_id\": \"playbook-f5454a9ea542482e8805ec43bf8ab201\"
+              }")
+            local http_status
+            http_status=$(echo "$response" | tail -n 1)
+            echo "Request info: status code = $http_status"
+            if [ "$http_status" -ne 200 ]; then
+              echo "Failed to create session: $response"
+              exit 1
+            fi
+            local http_body
+            http_body=$(echo "$response" | sed '$d')
+            local session_id
+            session_id=$(echo "$http_body" | jq -r '.session_id')
+            if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
+              echo "Failed to get session ID, body = $http_body"
+              exit 1
+            fi
+            echo "Session created with ID: $session_id"
+            gh pr comment "${{ github.event.number }}" --body "Devin Session ID: $session_id"
+          }
+
+          update_session() {
+            local session_id="$1"
+            local message="$2"
+            echo "Updating Devin session: $session_id"
+            
+            # まずセッションの状態を確認
+            local session_status
+            session_status=$(check_session_status "$session_id")
+            
+            if [ "$session_status" = "exited" ] || [ "$session_status" = "completed" ]; then
+              echo "Session has already exited/completed. Will use existing results."
+              return 0
+            fi
+            
+            local escaped_message=$(echo "$message" | jq -R -s .)
+            local response
+            response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/session/${session_id}/message" \
+              -H "Authorization: Bearer $DEVIN_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"message\": $escaped_message}")
+            local http_status
+            http_status=$(echo "$response" | tail -n 1)
+            echo "Request info: status code = $http_status"
+            if [ "$http_status" -ne 200 ]; then
+              echo "Failed to update session: $response"
+              # セッションが既に終了している場合は既存結果を使用
+                if [[ "$response" == *"already exited"* ]] || [[ "$response" == *"Devin session already exited"* ]]; then
+                echo "Session already exited, will use existing results."
+                return 0
+              fi
+              exit 1
+            fi
+            echo "Session updated successfully"
+          }
+
+          instructions="指示: ${{ github.repository }}の Pull Request #${{ github.event.number }} をレビューしてください。レビューでは以下を行ってください: 1. Pull Requestの変更点を確認し、コードの品質、バグ、セキュリティの問題がないかを確認する 2. 変更内容のサマリと、潜在的な問題点や改善点を簡潔にまとめてください 3. 特に重要な問題がある場合は、具体的な修正提案を含めてください 4. レビュー結果をPull Requestにコメントとして投稿してください。制約事項: すべてのコメントは日本語で行ってください。簡潔で要点を絞ったレビューを心がけてください。重大な問題がない場合も、改善提案があれば記載してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果」という標題を付けてください。PRコメントも同様の内容で投稿してください。"
+
+          if [ -z "$session_comment" ]; then
+            # 初回の場合は新セッションを作成（全コミットをレビュー）
+            echo "No existing session found, creating new session for full PR review"
+            create_session "$instructions"
+          else
+            # 既存セッションがある場合
+            session_id=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
+            if [ -z "$session_id" ]; then
+              echo "Failed to extract session ID from comment: $session_comment"
+              exit 1
+            fi
+            
+            session_status=$(check_session_status "$session_id")
+            echo "Existing session status: $session_status"
+            
+            # セッションが完了済みの場合は既存結果を使用
+            if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
+              echo "Session already completed/exited, will use existing results."
+            elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
+              echo "Session is still running, will wait for results..."
+            else
+              echo "Session status unclear, sending review request..."
+              update_session "$session_id" "$instructions"
+            fi
+          fi
+          
+          # 最新のコミットについての追加レビューをリクエスト
+          latest_commit_instruction="最新のコミット ${{ github.event.pull_request.head.sha }} の変更点について追加レビューをお願いします。前回のレビューに加えて、新しい変更点があれば指摘してください。また、レビュー結果をPull Requestにコメントとして投稿してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）」という標題を付けてください。"
+          update_session "$session_id" "$latest_commit_instruction"
+          
+  slack-notification:
+    runs-on: ubuntu-latest
+    needs: code-review
+    if: always() && !contains(github.event.pull_request.body, 'skip-review')
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Get Devin session results
+        id: get-results
+        run: |
+          echo "Getting Devin session results..."
+          
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL is not set"
+            exit 1
+          fi
+          
+          # 最新のセッションIDを取得
+          session_comment=$(gh pr view "${{ github.event.number }}" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | tail -n 1)
+          session_id=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
+          
+          if [ -z "$session_id" ]; then
+            echo "Failed to extract session ID"
+            echo "results=Devin session not found" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Found session ID: $session_id"
+          
+          # 3回の試行、各60秒待機
+          max_attempts=3
+          wait_time=60
+          
+          for i in $(seq 1 $max_attempts); do
+            echo "Attempt $i/$max_attempts..."
+            
+            # メッセージを取得
+            response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}" \
+              -H "Authorization: Bearer ${{ secrets.DEVIN_API_KEY }}")
+            
+            if [ $? -eq 0 ] && [ -n "$response" ]; then
+              echo "Response received, checking for messages..."
+              
+              # messagesフィールドが存在するかチェック
+              has_messages=$(echo "$response" | jq -r 'has("messages")' 2>/dev/null || echo "false")
+              
+              if [ "$has_messages" = "true" ]; then
+                # devin_messageタイプの最後のメッセージを取得
+                last_devin_message=$(echo "$response" | jq -r '
+                  .messages 
+                  | map(select(.type == "devin_message" and .message != null and (.message | length) > 100))
+                  | if length > 0 then .[-1].message else null end
+                ' 2>/dev/null)
+                
+                if [ "$last_devin_message" != "null" ] && [ -n "$last_devin_message" ] && [ ${#last_devin_message} -gt 100 ]; then
+                  echo "Found devin message (${#last_devin_message} characters)"
+                  
+                  # レビュー結果の標題が含まれているかチェック
+                  if [[ "$last_devin_message" =~ "${{ github.repository }} PR #${{ github.event.number }} レビュー結果" ]]; then
+                    echo "Found complete review result with proper title format"
+                    break
+                  else
+                    echo "Found devin message but missing expected title format, will continue waiting..."
+                  fi
+                else
+                  echo "No valid devin message found yet"
+                fi
+              else
+                echo "No messages field found in response"
+              fi
+            else
+              echo "Failed to get response or empty response"
+            fi
+            
+            # 最後の試行でない場合は待機
+            if [ $i -lt $max_attempts ]; then
+              echo "Waiting $wait_time seconds before next attempt..."
+              sleep $wait_time
+            else
+              echo "Max attempts reached"
+              # 最後でも使える回答があれば使用
+              if [ "$last_devin_message" != "null" ] && [ -n "$last_devin_message" ] && [ ${#last_devin_message} -gt 50 ]; then
+                echo "Using best available devin message"
+                break
+              fi
+            fi
+          done
+          
+          # 最終的なメッセージを設定
+          if [ "$last_devin_message" != "null" ] && [ -n "$last_devin_message" ]; then
+            results="$last_devin_message"
+          else
+            # フォールバック: 最後のdevin_messageを取得（条件を緩和）
+            results=$(echo "$response" | jq -r '
+              if has("messages") then
+                .messages 
+                | map(select(.type == "devin_message" and .message != null))
+                | if length > 0 then .[-1].message else "Devin分析中... セッションID: '"$session_id"'" end
+              else
+                "Devin分析中... セッションID: '"$session_id"'"
+              end
+            ' 2>/dev/null || echo "Devin分析中... セッションID: $session_id")
+          fi
+          
+          echo "Final results length: ${#results}"
+          echo "Results preview: ${results:0:200}..."
+          
+          # 結果が空またはnullの場合のフォールバック
+          if [ -z "$results" ] || [ "$results" = "null" ]; then
+            results="Devin分析中... セッションID: $session_id"
+          fi
+          
+          {
+            echo "results<<EOF"
+            echo "$results"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Send to Slack
+        run: |
+          echo "Sending notification to Slack..."
+          
+          # レビュー結果から主要な情報を抽出
+          title=$(echo "${{ steps.get-results.outputs.results }}" | head -n 1 | sed 's/^# *//' | sed 's/^## *//')
+          
+          # JSONペイロードを美観に作成
+          jq -n \
+            --arg text "🔍 Devin AI Code Review Completed" \
+            --arg pr_url "${{ github.event.pull_request.html_url }}" \
+            --arg pr_number "${{ github.event.number }}" \
+            --arg pr_title "${{ github.event.pull_request.title }}" \
+            --arg repo "${{ github.repository }}" \
+            --arg results "${{ steps.get-results.outputs.results }}" \
+            --arg title "$title" \
+            '{
+              text: $text,
+              attachments: [
+                {
+                  color: "good",
+                  blocks: [
+                    {
+                      type: "header",
+                      text: {
+                        type: "plain_text",
+                        text: "🤖 Devin AI Code Review",
+                        emoji: true
+                      }
+                    },
+                    {
+                      type: "section",
+                      fields: [
+                        {
+                          type: "mrkdwn",
+                          text: ("*Repository:*\n" + $repo)
+                        },
+                        {
+                          type: "mrkdwn",
+                          text: ("*PR Number:*\n#" + $pr_number)
+                        }
+                      ]
+                    },
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: ("*Pull Request:*\n<" + $pr_url + "|" + $pr_title + ">")
+                      }
+                    },
+                    {
+                      type: "divider"
+                    },
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: "*📋 Review Results:*"
+                      }
+                    },
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: $results
+                      }
+                    },
+                    {
+                      type: "context",
+                      elements: [
+                        {
+                          type: "mrkdwn",
+                          text: ("🔗 <" + $pr_url + "|View Pull Request> | 🤖 Powered by Devin AI")
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }' > slack_payload.json
+          
+          # Slack APIへの送信
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            -H 'Content-type: application/json' \
+            --data @slack_payload.json \
+            "$SLACK_WEBHOOK_URL")
+          
+          http_status=$(echo "$response" | tail -n 1)
+          
+          if [ "$http_status" -eq 200 ]; then
+            echo "Slack notification sent successfully"
+          else
+            echo "Failed to send Slack notification. Status: $http_status"
+            echo "Response: $(echo "$response" | sed '$d')"
+            exit 1
+          fi
