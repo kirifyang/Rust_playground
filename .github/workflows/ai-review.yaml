@@ -274,29 +274,79 @@ jobs:
         run: |
           echo "Sending notification to Slack..."
           
-          # JSONペイロードを安全に作成
+          # レビュー結果から主要な情報を抽出
+          title=$(echo "${{ steps.get-results.outputs.results }}" | head -n 1 | sed 's/^# *//' | sed 's/^## *//')
+          
+          # JSONペイロードを美観に作成
           jq -n \
-            --arg text "Devin AI Code Review Results for PR #${{ github.event.number }}" \
+            --arg text "🔍 Devin AI Code Review Completed" \
             --arg pr_url "${{ github.event.pull_request.html_url }}" \
             --arg pr_number "${{ github.event.number }}" \
             --arg pr_title "${{ github.event.pull_request.title }}" \
+            --arg repo "${{ github.repository }}" \
             --arg results "${{ steps.get-results.outputs.results }}" \
+            --arg title "$title" \
             '{
               text: $text,
-              blocks: [
+              attachments: [
                 {
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: ("*PR:* <" + $pr_url + "|#" + $pr_number + " - " + $pr_title + ">")
-                  }
-                },
-                {
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: ("*Devin AI Review:*\n```\n" + $results + "\n```")
-                  }
+                  color: "good",
+                  blocks: [
+                    {
+                      type: "header",
+                      text: {
+                        type: "plain_text",
+                        text: "🤖 Devin AI Code Review",
+                        emoji: true
+                      }
+                    },
+                    {
+                      type: "section",
+                      fields: [
+                        {
+                          type: "mrkdwn",
+                          text: ("*Repository:*\n" + $repo)
+                        },
+                        {
+                          type: "mrkdwn",
+                          text: ("*PR Number:*\n#" + $pr_number)
+                        }
+                      ]
+                    },
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: ("*Pull Request:*\n<" + $pr_url + "|" + $pr_title + ">")
+                      }
+                    },
+                    {
+                      type: "divider"
+                    },
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: "*📋 Review Results:*"
+                      }
+                    },
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: $results
+                      }
+                    },
+                    {
+                      type: "context",
+                      elements: [
+                        {
+                          type: "mrkdwn",
+                          text: "🔗 <" + $pr_url + "|View Pull Request> | 🤖 Powered by Devin AI"
+                        }
+                      ]
+                    }
+                  ]
                 }
               ]
             }' > slack_payload.json
