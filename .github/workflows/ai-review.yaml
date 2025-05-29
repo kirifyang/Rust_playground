@@ -96,8 +96,7 @@ jobs:
             session_status=$(check_session_status "$session_id")
             
             if [ "$session_status" = "exited" ] || [ "$session_status" = "completed" ]; then
-              echo "Session has already exited/completed. Creating new session instead."
-              create_session "$message"
+              echo "Session has already exited/completed. Will use existing results."
               return 0
             fi
             
@@ -112,10 +111,9 @@ jobs:
             echo "Request info: status code = $http_status"
             if [ "$http_status" -ne 200 ]; then
               echo "Failed to update session: $response"
-              # セッションが既に終了している場合は新しいセッションを作成
-              if [[ "$response" == *"already exited"* ]]; then
-                echo "Session already exited, creating new session..."
-                create_session "$message"
+              # セッションが既に終了している場合は既存結果を使用
+                if [[ "$response" == *"already exited"* ]] || [[ "$response" == *"Devin session already exited"* ]]; then
+                echo "Session already exited, will use existing results."
                 return 0
               fi
               exit 1
@@ -123,7 +121,6 @@ jobs:
             echo "Session updated successfully"
           }
 
-          # 更新指示内容
           instructions="指示: ${{ github.repository }}の Pull Request #${{ github.event.number }} をレビューしてください。レビューでは以下を行ってください: 1. Pull Requestの変更点を確認し、コードの品質、バグ、セキュリティの問題がないかを確認する 2. 変更内容のサマリと、潜在的な問題点や改善点を簡潔にまとめてください 3. 特に重要な問題がある場合は、具体的な修正提案を含めてください。制約事項: すべてのコメントは日本語で行ってください。簡潔で要点を絞ったレビューを心がけてください。重大な問題がない場合も、改善提案があれば記載してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果」という標題を付けてください。"
 
           if [ -z "$session_comment" ]; then
@@ -141,11 +138,9 @@ jobs:
             session_status=$(check_session_status "$session_id")
             echo "Existing session status: $session_status"
             
-            # セッションが完了済みの場合は最新コミットのレビューを依頼
+            # セッションが完了済みの場合は既存結果を使用
             if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
-              echo "Session completed, will use existing results for latest commit review"
-              latest_commit_instruction="最新のコミット ${{ github.event.pull_request.head.sha }} の変更点について追加レビューをお願いします。前回のレビューに加えて、新しい変更点があれば指摘してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）」という標題を付けてください。"
-              create_session "$latest_commit_instruction"
+              echo "Session already completed/exited, will use existing results."
             elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
               echo "Session is still running, will wait for results..."
             else
