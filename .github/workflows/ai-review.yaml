@@ -55,7 +55,7 @@ jobs:
             echo "$status"
           }
 
-              create_session() {
+           create_session() {
               local prompt="$1"
               echo "Creating new Devin session..."
               local escaped_prompt=$(echo "$prompt" | jq -R -s .)
