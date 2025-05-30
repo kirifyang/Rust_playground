@@ -55,36 +55,36 @@ jobs:
             echo "$status"
           }
 
-          create_session() {
-            local prompt="$1"
-            echo "Creating new Devin session..."
-            local escaped_prompt=$(echo "$prompt" | jq -R -s .)
-            local response
-            response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/sessions" \
-              -H "Authorization: Bearer $DEVIN_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "{
+           create_session() {
+              local prompt="$1"
+              echo "Creating new Devin session..."
+              local escaped_prompt=$(echo "$prompt" | jq -R -s .)
+              local response
+              response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/sessions" \
+                -H "Authorization: Bearer $DEVIN_API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{
                 \"prompt\": $escaped_prompt,
-                \"playbook_id\": \"playbook-f5454a9ea542482e8805ec43bf8ab201\"
-              }")
-            local http_status
-            http_status=$(echo "$response" | tail -n 1)
-            echo "Request info: status code = $http_status"
-            if [ "$http_status" -ne 200 ]; then
-              echo "Failed to create session: $response"
-              exit 1
-            fi
-            local http_body
-            http_body=$(echo "$response" | sed '$d')
-            local session_id
-            session_id=$(echo "$http_body" | jq -r '.session_id')
-            if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
-              echo "Failed to get session ID, body = $http_body"
-              exit 1
-            fi
-            echo "Session created with ID: $session_id"
-            gh pr comment "${{ github.event.number }}" --body "Devin Session ID: $session_id"
-          }
+                \"idempotent\": true
+                }")
+              local http_status
+              http_status=$(echo "$response" | tail -n 1)
+              echo "Request info: status code = $http_status"
+              if [ "$http_status" -ne 200 ]; then
+                echo "Failed to create session: $response"
+                exit 1
+              fi
+              local http_body
+              http_body=$(echo "$response" | sed '$d')
+              local session_id
+              session_id=$(echo "$http_body" | jq -r '.session_id')
+              if [ -z "$session_id" ] || [ "$session_id" = "null" ]; then
+                echo "Failed to get session ID, body = $http_body"
+                exit 1
+              fi
+              echo "Session created with ID: $session_id"
+              gh pr comment "${{ github.event.number }}" --body "Devin Session ID: $session_id"
+              }
 
           update_session() {
             local session_id="$1"
