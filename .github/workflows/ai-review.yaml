@@ -457,6 +457,12 @@ jobs:
           fi
           update_session_with_retry "$SESSION_ID" "$latest_commit_instruction"
           
+      - name: Set job outputs
+        run: |
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr_title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+          echo "session_id=$SESSION_ID" >> $GITHUB_OUTPUT
+          
   slack-notification:
     runs-on: ubuntu-latest
     needs: code-review
@@ -597,6 +603,9 @@ jobs:
             local counter=1
             
             echo "Extracting individual review items..."
+            echo "Content length: ${#content}"
+            echo "Content preview (first 500 chars):"
+            echo "${content:0:500}..."
             
             # ###REVIEW_START_N### から ###REVIEW_END_N### までの内容を抽出
             while true; do
@@ -605,9 +614,15 @@ jobs:
               end_marker="###REVIEW_END_${counter}###"
               
               echo "Looking for review item $counter..."
+              echo "Start marker: $start_marker"
+              echo "End marker: $end_marker"
               
-              # sedを使って特定のレビュー項目を抽出
-              review_item=$(echo "$content" | sed -n "/$start_marker/,/$end_marker/p" | sed "1d;\$d" 2>/dev/null || echo "")
+              # awk を使った安全な抽出方法
+              review_item=$(echo "$content" | awk "
+                /$start_marker/ { flag=1; next }
+                /$end_marker/ { flag=0 }
+                flag { print }
+              ")
               
               if [ -z "$review_item" ]; then
                 echo "No more review items found. Total extracted: $((counter-1))"
@@ -619,27 +634,27 @@ jobs:
               echo "$review_item"
               echo "--- End Review Item $counter ---"
               
-              # ファイルパスと行番号を抽出（可能な場合）
-              filepath=$(echo "$review_item" | grep -oE '[a-zA-Z0-9_/.-]+\.(rs|js|ts|py|java|cpp|c|h|md|yaml|yml|json|toml|txt)' | head -n 1 || echo "")
-              line_number=$(echo "$review_item" | grep -oE ':[0-9]+' | sed 's/://' | head -n 1 || echo "")
-              
               # PR コメントを投稿
               echo "Posting review comment #$counter"
               
-              # コメント本文を作成
-              echo "Creating comment body for review item $counter"
-              
               # 一時ファイルを使用してコメント本文を作成
               temp_comment="/tmp/review_comment_${counter}.md"
-              echo "🤖 Devin AI Review" > "$temp_comment"
+              echo "🤖 Devin AI Review #$counter" > "$temp_comment"
               echo "" >> "$temp_comment"
               echo "$review_item" >> "$temp_comment"
               echo "" >> "$temp_comment"
               echo "---" >> "$temp_comment"
-              echo "Posted by Devin AI Code Review Bot" >> "$temp_comment"
+              echo "*Posted by Devin AI Code Review Bot*" >> "$temp_comment"
               
               # PRコメントを投稿
-              gh pr comment "${{ github.event.number }}" --body-file "$temp_comment"
+              if ! gh pr comment "${{ needs.code-review.outputs.pr_number }}" --body-file "$temp_comment"; then
+                echo "Error: Failed to post review comment #$counter"
+                echo "Comment content:"
+                cat "$temp_comment"
+                echo "Continuing with next review item..."
+              else
+                echo "Successfully posted review comment #$counter"
+              fi
               
               # 一時ファイルを削除
               rm -f "$temp_comment"
@@ -668,13 +683,24 @@ jobs:
           # レビュー結果から主要な情報を抽出
           title=$(echo "${{ steps.get-results.outputs.results }}" | head -n 1 | sed 's/^# *//' | sed 's/^## *//')
           
+          # PR情報を取得
+          PR_URL="https://github.com/${{ github.repository }}/pull/${{ needs.code-review.outputs.pr_number }}"
+          PR_NUMBER="${{ needs.code-review.outputs.pr_number }}"
+          PR_TITLE="${{ needs.code-review.outputs.pr_title }}"
+          REPO="${{ github.repository }}"
+          
+          echo "PR URL: $PR_URL"
+          echo "PR Number: $PR_NUMBER"
+          echo "PR Title: $PR_TITLE"
+          echo "Repository: $REPO"
+          
           # JSONペイロードを美観に作成
           jq -n \
             --arg text "Devin AI Code Review Completed" \
-            --arg pr_url "${{ github.event.pull_request.html_url }}" \
-            --arg pr_number "${{ github.event.number }}" \
-            --arg pr_title "${{ github.event.pull_request.title }}" \
-            --arg repo "${{ github.repository }}" \
+            --arg pr_url "$PR_URL" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg pr_title "$PR_TITLE" \
+            --arg repo "$REPO" \
             --arg results "${{ steps.get-results.outputs.results }}" \
             --arg title "$title" \
             '{
