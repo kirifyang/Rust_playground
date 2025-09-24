@@ -142,11 +142,69 @@ jobs:
             echo "$status"
           }
 
+          get_session_snapshot() {
+            local session_id="$1"
+            echo "Getting snapshot for session: $session_id"
+            local response
+            response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}" \
+              -H "Authorization: Bearer $DEVIN_API_KEY")
+            
+            local snapshot_id
+            snapshot_id=$(echo "$response" | jq -r '.snapshot_id // empty')
+            if [ -n "$snapshot_id" ] && [ "$snapshot_id" != "null" ]; then
+              echo "Found snapshot ID: $snapshot_id"
+              echo "$snapshot_id"
+            else
+              echo "No snapshot ID found for session $session_id"
+              echo ""
+            fi
+          }
+
+          get_latest_session_info() {
+            echo "Searching for latest session from PR comments..."
+            local latest_session_comment
+            latest_session_comment=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | tail -n 1)
+            
+            if [ -n "$latest_session_comment" ]; then
+              local session_id
+              session_id=$(echo "$latest_session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
+              echo "Found latest session: $session_id"
+              echo "$session_id"
+            else
+              echo "No previous session found in PR comments"
+              echo ""
+            fi
+          }
+
           create_session() {
             local prompt="$1"
+            local snapshot_id="$2"  # オプショナルなsnapshotパラメータ
             echo "Creating new Devin session..."
             local escaped_prompt=$(echo "$prompt" | jq -R -s .)
             local response
+            
+            # リクエストボディを構築（snapshot_idがある場合は含める）
+            local request_body
+            if [ -n "$snapshot_id" ] && [ "$snapshot_id" != "" ]; then
+              echo "Using snapshot ID to inherit context: $snapshot_id"
+              request_body=$(jq -n \
+                --arg prompt "$prompt" \
+                --arg snapshot "$snapshot_id" \
+                '{
+                  "prompt": $prompt,
+                  "snapshot_id": $snapshot,
+                  "idempotent": true
+                }')
+            else
+              echo "Creating fresh session without context inheritance"
+              request_body=$(jq -n \
+                --arg prompt "$prompt" \
+                '{
+                  "prompt": $prompt,
+                  "idempotent": true
+                }')
+            fi
+            
             # idempotentパラメータを使用して、同一プロンプトでの重複セッション作成を防止
             response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/sessions" \
               -H "Authorization: Bearer $DEVIN_API_KEY" \
@@ -284,15 +342,41 @@ jobs:
 
           # 指示文を環境変数から取得（playbook_idの代わりにidempotentパラメータを使用）
 
+          # 智能会话管理：尝试继承现有会话或从快照创建新会话
           if [ -z "$session_comment" ]; then
-            # 初回の場合は新セッションを作成（全コミットをレビュー）
-            echo "No existing session found, creating new session for full PR review"
-            create_session "$FULL_INSTRUCTIONS"
+            # 没有找到现有会话，尝试查找之前的会话快照
+            echo "No existing session found, looking for previous sessions to inherit from..."
+            previous_session=$(get_latest_session_info)
+            
+            if [ -n "$previous_session" ] && [ "$previous_session" != "" ]; then
+              echo "Found previous session: $previous_session"
+              previous_status=$(check_session_status "$previous_session")
+              echo "Previous session status: $previous_status"
+              
+              # 如果之前的会话已完成或退出，尝试获取其快照
+              if [ "$previous_status" = "completed" ] || [ "$previous_status" = "exited" ] || [ "$previous_status" = "finished" ]; then
+                snapshot_id=$(get_session_snapshot "$previous_session")
+                if [ -n "$snapshot_id" ] && [ "$snapshot_id" != "" ]; then
+                  echo "Creating new session with inherited context from snapshot: $snapshot_id"
+                  create_session "$FULL_INSTRUCTIONS" "$snapshot_id"
+                else
+                  echo "No snapshot available, creating fresh session"
+                  create_session "$FULL_INSTRUCTIONS"
+                fi
+              else
+                echo "Previous session still active ($previous_status), creating fresh session"
+                create_session "$FULL_INSTRUCTIONS"
+              fi
+            else
+              echo "No previous sessions found, creating fresh session for full PR review"
+              create_session "$FULL_INSTRUCTIONS"
+            fi
+            
             # create_session 内で export SESSION_ID しているはずなので読み込む
             if [ -n "$SESSION_ID" ]; then
               echo "SESSION_ID set to $SESSION_ID from create_session"
             else
-              # 保険: 再取得を試みる
+              # 保险: 再取得を試みる
               echo "SESSION_ID not exported, trying to re-read from PR comments..."
               session_comment=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | head -n 1)
               SESSION_ID=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
@@ -311,7 +395,7 @@ jobs:
             echo "Existing session status: $session_status"
             
             # セッションが完了済みの場合は既存結果を使用
-            if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
+            if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ] || [ "$session_status" = "finished" ]; then
               echo "Session already completed/exited, will use existing results."
             elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
               echo "Session is still running, will wait for results..."
@@ -321,6 +405,16 @@ jobs:
             elif [ "$session_status" = "initializing" ] || [ "$session_status" = "starting" ]; then
               echo "Session is still initializing, will wait for it to be ready..."
               # 初期化中の場合は少し待ってから再試行しない（結果取得時に処理）
+            elif [ "$session_status" = "closed" ] || [ "$session_status" = "terminated" ]; then
+              echo "Session has been closed/terminated, creating new session with inherited context..."
+              snapshot_id=$(get_session_snapshot "$SESSION_ID")
+              if [ -n "$snapshot_id" ] && [ "$snapshot_id" != "" ]; then
+                echo "Using snapshot from closed session: $snapshot_id"
+                create_session "$INCREMENTAL_INSTRUCTIONS" "$snapshot_id"
+              else
+                echo "No snapshot available from closed session, creating fresh session"
+                create_session "$INCREMENTAL_INSTRUCTIONS"
+              fi
             else
               echo "Session status unclear ($session_status), sending review request (incremental)..."
               update_session_with_retry "$SESSION_ID" "$INCREMENTAL_INSTRUCTIONS"
@@ -341,7 +435,7 @@ jobs:
   slack-notification:
     runs-on: ubuntu-latest
     needs: code-review
-    if: always() && !contains(github.event.pull_request.body, 'skip-review')
+    if: success() && !contains(github.event.pull_request.body, 'skip-review')
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
