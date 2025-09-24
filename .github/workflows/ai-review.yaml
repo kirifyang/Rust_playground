@@ -53,12 +53,12 @@ jobs:
         各レビュー項目は連番（1, 2, 3...）を使用し、START と END で必ず囲むこと。
         
         出力構造（例）:
-        1) 見出し（必須）: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（全体）"
+        1) 見出し（必須）: "レビュー結果（全体）"
         2) サマリ（3-5行程度）
         3) 個別レビュー項目（それぞれ ###REVIEW_START_N### と ###REVIEW_END_N### で囲む）
         4) 最後に総評と優先度の高い修正リスト
       INCREMENTAL_INSTRUCTIONS: |
-        指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} の最新の変更（差分）のみをレビューしてください。初回セッションの後の呼び出しでは、PR全体のサマリは不要です。以下の形式で日本語で回答してください。タイトルは必須で "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）" としてください。
+        指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} の最新の変更（差分）のみをレビューしてください。初回セッションの後の呼び出しでは、PR全体のサマリは不要です。以下の形式で日本語で回答してください。タイトルは必須で "レビュー結果（更新）" としてください。
         
         制約・形式（必須）:
         - 差分に対してのみレビューを行うこと（影響するファイルと変更箇所を明記）。
@@ -79,7 +79,7 @@ jobs:
         各レビュー項目は連番（1, 2, 3...）を使用し、START と END で必ず囲むこと。
         
         出力構造（例）:
-        1) 見出し（必須）: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）"
+        1) 見出し（必須）: "レビュー結果（更新）"
         2) 変更点の要約（1-3行）
         3) 個別レビュー項目（それぞれ ###REVIEW_START_N### と ###REVIEW_END_N### で囲む）
         4) 必要な修正案と優先度
@@ -515,12 +515,13 @@ jobs:
                 if [ "$last_devin_message" != "null" ] && [ -n "$last_devin_message" ] && [ ${#last_devin_message} -gt 100 ]; then
                   echo "Found devin message (${#last_devin_message} characters)"
                   
-                  # レビュー結果の標題が含まれているかチェック
-                  if [[ "$last_devin_message" =~ "${{ github.repository }} PR #${{ github.event.number }} レビュー結果" ]]; then
-                    echo "Found complete review result with proper title format"
+                  # レビュー結果の標題が含まれているかチェック（簡化された検出）
+                  if [[ "$last_devin_message" =~ "レビュー結果" ]]; then
+                    echo "Found complete review result with レビュー結果 title"
                     break
                   else
-                    echo "Found devin message but missing expected title format, will continue waiting..."
+                    echo "Found devin message but missing レビュー結果 title, will continue waiting..."
+                    echo "Message preview: ${last_devin_message:0:100}..."
                   fi
                 else
                   echo "No valid devin message found yet"
