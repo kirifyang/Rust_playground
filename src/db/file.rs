@@ -1,8 +1,7 @@
 use crate::db::schema::{Opensky, MaxDateRow, MinDateRow};
 use chrono::{Duration, NaiveDate};
 use csv::Writer;
-use klickhouse::{Client, Date, Row};
-use serde::Deserialize;
+use klickhouse::Client;
 use std::fs;
 use std::fs::File;
 use std::iter::Iterator;
@@ -11,9 +10,12 @@ use std::path::Path;
 // use std::path::PathBuf;
 // use std::process::Command;
 
+#[allow(dead_code)]
 const CLICKHOUSE_USER_FILE_PATH: &str = "./clickhouse/click_data/user_files";
+#[allow(dead_code)]
 const PREFIX: &str = "flightlist_";
 
+#[allow(dead_code)]
 pub fn get_csvs_names_grouped_by_date() -> Vec<String> {
     fs::read_dir(CLICKHOUSE_USER_FILE_PATH)
         .unwrap()
@@ -33,6 +35,7 @@ pub fn get_csvs_names_grouped_by_date() -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+#[allow(dead_code)]
 pub async fn split_table_by_day(
     client: &Client,
     table_name: &str,

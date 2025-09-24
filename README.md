@@ -3,7 +3,6 @@
 Playground for Clickhouse.
 Which is based on **[klickhouse](https://github.com/Protryon/klickhouse/)** and **[actix-web](https://github.com/actix/actix-web)** library.
 
-
 ## Process
 
 - **Frontend [not start]**
@@ -12,7 +11,7 @@ Which is based on **[klickhouse](https://github.com/Protryon/klickhouse/)** and 
 
 ## Files structure
 
-```
+```text
 Project                      
 ├─ config                    
 │  ├─ build_db.sh            
@@ -42,7 +41,6 @@ Project
     - [x] UserData Table
   - [x] Insert Data
   - [x] Query Data
-
 
 - [ ] Actix-web Server
 
