@@ -30,7 +30,7 @@ jobs:
       DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       FULL_INSTRUCTIONS: |
-        指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} をレビューしてください。最初の実行（セッション未作成）では必ずPR全体を通読してサマリ（変更の要約、目的、影響範囲）を作成し、その上でコードレビューを行ってください。レビューは日本語で行ってください。出力には必須で次のタイトルを含めてください: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（全体）"。
+        指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} (https://github.com/${{ github.repository }}/pull/${{ github.event.number }})をレビューしてください。最初の実行（セッション未作成）では必ずPR全体を通読してサマリ（変更の要約、目的、影響範囲）を作成し、その上でコードレビューを行ってください。レビューは日本語で行ってください。出力には必須で次のタイトルを含めてください: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（全体）"。
         
         制約・形式（必須）:
         - 評価は簡潔に、要点を最初に述べること。
@@ -39,14 +39,24 @@ jobs:
         - 重要度は High / Medium / Low のいずれかでタグ付けしてください。
         - サマリ部分では、変更の目的、影響範囲、テストの要否を明記してください。
         
+        **重要**: 個別のコードレビュー指摘は以下の形式で必ず囲んでください:
+        ```
+        ###REVIEW_START_1###
+        [Issue] ファイルパス:行番号 - 指摘内容
+        重要度: High/Medium/Low
+        詳細説明...
+        修正案:
+        ```修正例```
+        ###REVIEW_END_1###
+        ```
+        
+        各レビュー項目は連番（1, 2, 3...）を使用し、START と END で必ず囲むこと。
+        
         出力構造（例）:
         1) 見出し（必須）: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（全体）"
         2) サマリ（3-5行程度）
-        3) 主要な問題（[Issue]）一覧（各1-3行 + 必要な修正例）
-        4) 改善提案（[Suggestion]）一覧
-        5) 軽微な指摘（[Nit]）
-        6) 確認事項（[Question]）
-        7) 最後に総評と優先度の高い修正リスト
+        3) 個別レビュー項目（それぞれ ###REVIEW_START_N### と ###REVIEW_END_N### で囲む）
+        4) 最後に総評と優先度の高い修正リスト
       INCREMENTAL_INSTRUCTIONS: |
         指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} の最新の変更（差分）のみをレビューしてください。初回セッションの後の呼び出しでは、PR全体のサマリは不要です。以下の形式で日本語で回答してください。タイトルは必須で "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）" としてください。
         
@@ -55,10 +65,23 @@ jobs:
         - ラベルプレフィックスは full_instructions と同様に利用: [Issue], [Suggestion], [Nit], [Question]
         - 各指摘に対し簡潔な修正提案を含める。重要度は High / Medium / Low を付与。
         
+        **重要**: 個別のコードレビュー指摘は以下の形式で必ず囲んでください:
+        ```
+        ###REVIEW_START_1###
+        [Issue] ファイルパス:行番号 - 指摘内容
+        重要度: High/Medium/Low
+        詳細説明...
+        修正案:
+        ```修正例```
+        ###REVIEW_END_1###
+        ```
+        
+        各レビュー項目は連番（1, 2, 3...）を使用し、START と END で必ず囲むこと。
+        
         出力構造（例）:
         1) 見出し（必須）: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）"
         2) 変更点の要約（1-3行）
-        3) 指摘一覧（ラベル付き）
+        3) 個別レビュー項目（それぞれ ###REVIEW_START_N### と ###REVIEW_END_N### で囲む）
         4) 必要な修正案と優先度
     steps:
       - uses: actions/checkout@v3
@@ -553,6 +576,88 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
+      - name: Parse and post individual review comments
+        run: |
+          echo "Parsing Devin review results for individual comments..."
+          
+          # Devinの結果から個別のレビュー項目を抽出
+          review_content="${{ steps.get-results.outputs.results }}"
+          
+          if [ -z "$review_content" ] || [ "$review_content" = "null" ]; then
+            echo "No review content available to parse"
+            exit 0
+          fi
+          
+          # レビュー項目を抽出する関数
+          extract_review_items() {
+            local content="$1"
+            local counter=1
+            
+            echo "Extracting individual review items..."
+            
+            # ###REVIEW_START_N### から ###REVIEW_END_N### までの内容を抽出
+            while true; do
+              # 各レビュー項目の開始と終了を検索
+              start_marker="###REVIEW_START_${counter}###"
+              end_marker="###REVIEW_END_${counter}###"
+              
+              echo "Looking for review item $counter..."
+              
+              # sedを使って特定のレビュー項目を抽出
+              review_item=$(echo "$content" | sed -n "/$start_marker/,/$end_marker/p" | sed "1d;\$d" 2>/dev/null || echo "")
+              
+              if [ -z "$review_item" ]; then
+                echo "No more review items found. Total extracted: $((counter-1))"
+                break
+              fi
+              
+              echo "Found review item $counter:"
+              echo "--- Review Item $counter ---"
+              echo "$review_item"
+              echo "--- End Review Item $counter ---"
+              
+              # ファイルパスと行番号を抽出（可能な場合）
+              filepath=$(echo "$review_item" | grep -oE '[a-zA-Z0-9_/.-]+\.(rs|js|ts|py|java|cpp|c|h|md|yaml|yml|json|toml|txt)' | head -n 1 || echo "")
+              line_number=$(echo "$review_item" | grep -oE ':[0-9]+' | sed 's/://' | head -n 1 || echo "")
+              
+              # PR コメントを投稿
+              echo "Posting review comment #$counter"
+              
+              # コメント本文を作成
+              echo "Creating comment body for review item $counter"
+              
+              # 一時ファイルを使用してコメント本文を作成
+              temp_comment="/tmp/review_comment_${counter}.md"
+              echo "🤖 Devin AI Review" > "$temp_comment"
+              echo "" >> "$temp_comment"
+              echo "$review_item" >> "$temp_comment"
+              echo "" >> "$temp_comment"
+              echo "---" >> "$temp_comment"
+              echo "Posted by Devin AI Code Review Bot" >> "$temp_comment"
+              
+              # PRコメントを投稿
+              gh pr comment "${{ github.event.number }}" --body-file "$temp_comment"
+              
+              # 一時ファイルを削除
+              rm -f "$temp_comment"
+              
+              # 次のレビュー項目へ
+              counter=$((counter + 1))
+              
+              # 安全のため最大50項目まで
+              if [ $counter -gt 50 ]; then
+                echo "Maximum review items limit (50) reached"
+                break
+              fi
+              
+              # 各コメント投稿間に少し待機
+              sleep 2
+            done
+          }
+          
+          # レビュー項目の抽出と投稿を実行
+          extract_review_items "$review_content"
+
       - name: Send to Slack
         run: |
           echo "Sending notification to Slack..."
@@ -562,7 +667,7 @@ jobs:
           
           # JSONペイロードを美観に作成
           jq -n \
-            --arg text "🔍 Devin AI Code Review Completed" \
+            --arg text "Devin AI Code Review Completed" \
             --arg pr_url "${{ github.event.pull_request.html_url }}" \
             --arg pr_number "${{ github.event.number }}" \
             --arg pr_title "${{ github.event.pull_request.title }}" \
@@ -579,7 +684,7 @@ jobs:
                       type: "header",
                       text: {
                         type: "plain_text",
-                        text: "🤖 Devin AI Code Review",
+                        text: "Devin AI Code Review",
                         emoji: true
                       }
                     },
