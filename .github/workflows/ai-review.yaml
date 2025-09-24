@@ -638,11 +638,12 @@ jobs:
               echo "End marker: $end_marker"
               
               # awk を使った安全な抽出方法（マーカー行も含める）
-              review_item=$(echo "$content" | awk "
-                /$start_marker/ { flag=1; print; next }
-                /$end_marker/ { flag=0; print; next }
+              # 変数を安全にエスケープして使用
+              review_item=$(echo "$content" | awk -v start="$start_marker" -v end="$end_marker" '
+                $0 ~ start { flag=1; print; next }
+                $0 ~ end { flag=0; print; next }
                 flag { print }
-              ")
+              ')
               
               if [ -z "$review_item" ]; then
                 echo "No more review items found. Total extracted: $((counter-1))"
@@ -651,7 +652,9 @@ jobs:
               
               echo "Found review item $counter:"
               echo "--- Review Item $counter ---"
-              echo "$review_item"
+              # 安全に内容を表示（最初の200文字のみ）
+              echo "$review_item" | head -c 200
+              echo "..."
               echo "--- End Review Item $counter ---"
               
               # PR コメントを投稿
@@ -661,14 +664,15 @@ jobs:
               temp_comment="/tmp/review_comment_${counter}.md"
               
               # レビュー項目からタイトルを抽出（最初の行から）
-              review_title=$(echo "$review_item" | head -n 1 | sed 's/^###REVIEW_START_[0-9]*###[[:space:]]*//')
+              review_title=$(echo "$review_item" | head -n 1 | sed 's/^###REVIEW_START_[0-9]*###[[:space:]]*//' 2>/dev/null || echo "")
               
-              echo "## 🤖 Devin AI Review #$counter" > "$temp_comment"
-              echo "" >> "$temp_comment"
-              echo "$review_item" >> "$temp_comment"
-              echo "" >> "$temp_comment"
-              echo "---" >> "$temp_comment"
-              echo "*Posted by Devin AI Code Review Bot*" >> "$temp_comment"
+              # 安全にコメントファイルを作成
+              {
+                echo "$review_item"
+                echo ""
+                echo "---"
+                echo "*Posted by Devin AI Code Review Bot*"
+              } > "$temp_comment"
               
               # PRコメントを投稿
               if ! gh pr comment "${{ needs.code-review.outputs.pr_number }}" --body-file "$temp_comment"; then
