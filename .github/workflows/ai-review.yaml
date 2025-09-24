@@ -2,14 +2,11 @@ name: Devin Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened]  # 初回PR作成時のみ自動実行
     branches: ['**']
 
   issue_comment:
-    types: [created]   # コメント作成時にトリガー
-  
-  push:
-    branches: ['**']
+    types: [created]   # @devin-ai-review コメントで手動トリガー
   
   workflow_dispatch:
     inputs:
@@ -72,16 +69,17 @@ jobs:
         3) 個別レビュー項目（それぞれ ###REVIEW_START_N### と ###REVIEW_END_N### で囲む）
         4) 最後に総評と優先度の高い修正リスト
       INCREMENTAL_INSTRUCTIONS: |
-        指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} の最新の変更（差分）のみをレビューしてください。**重要**: このPRで変更されたファイル（Files changed）のみを対象としてコードレビューを行ってください。変更されていないファイルやコードはレビュー対象外です。PRの「Files changed」タブで確認できる変更されたファイルのみをレビューしてください。初回セッションの後の呼び出しでは、PR全体のサマリは不要です。以下の形式で日本語で回答してください。タイトルは必須で "レビュー結果（更新）" としてください。
+        指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} をレビューしてください。**重要**: このPRで変更されたファイル（Files changed）のみを対象としてコードレビューを行ってください。変更されていないファイルやコードはレビュー対象外です。PRの「Files changed」タブで確認できる変更されたファイルのみをレビューしてください。レビューは日本語で行ってください。出力には必須で次のタイトルを含めてください: "レビュー結果（更新）"。
         
         **重要**: 確認メッセージや「承知いたしました」などの返答は不要です。直接レビュー結果を出力してください。
         
         制約・形式（必須）:
         - **重要**: このPRで変更されたファイル（Files changed）のみをレビュー対象とし、変更されていないファイルやコードは一切レビューしないでください。
-        - 差分に対してのみレビューを行うこと（影響するファイルと変更箇所を明記）。
-        - ラベルプレフィックスは full_instructions と同様に利用: [Issue], [Suggestion], [Nit], [Question]
+        - 評価は簡潔に、要点を最初に述べること。
+        - 指摘にはラベルプレフィックスを付けること。使用するラベル: [Issue]（重大なバグや動作不良）, [Suggestion]（機能改善提案）, [Nit]（軽微なスタイル/表記修正）, [Question]（不明点・確認事項）.
         - **重要**: レビュー項目は最大3個までとし、High/Medium優先度の重要な指摘のみに絞ってください。軽微な[Nit]や[Question]は最小限に留めてください。
-        - 各指摘に対し簡潔な修正提案を含める。重要度は High / Medium / Low を付与。
+        - 各指摘は「ファイルパス:行番号（可能なら）」、短い説明、必要なら修正例/パッチ案 を含める。
+        - 重要度は High / Medium / Low のいずれかでタグ付けしてください。
         
         **重要**: 個別のコードレビュー指摘は以下の形式で必ず囲んでください:
         ```
@@ -144,7 +142,7 @@ jobs:
             exit 1
           fi
           
-          # PR番号の設定と確認（イベントタイプに応じて適切な値を取得）
+          # PR番号の設定と確認
           echo "Event name: ${{ github.event_name }}"
           
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -162,11 +160,8 @@ jobs:
             PR_NUMBER="${{ github.event.inputs.pr_number }}"
             echo "Manual trigger: PR #$PR_NUMBER"
           else
-            # pushイベントなどの場合、現在のブランチに関連するPRを検索
-            echo "Searching for PR associated with current branch..."
-            CURRENT_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
-            PR_NUMBER=$(gh pr list --head "$CURRENT_BRANCH" --json number --jq '.[0].number // empty')
-            echo "Found PR #$PR_NUMBER for branch $CURRENT_BRANCH"
+            echo "Unsupported event type: ${{ github.event_name }}"
+            exit 1
           fi
           
           if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
@@ -445,43 +440,13 @@ jobs:
             session_status=$(check_session_status "$SESSION_ID")
             echo "Existing session status: $session_status"
             
-            # セッションが完了済みの場合は既存結果を使用
-            if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ] || [ "$session_status" = "finished" ]; then
-              echo "Session already completed/exited, will use existing results."
-            elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
-              echo "Session is still running, will wait for results..."
-            elif [ "$session_status" = "suspended" ] || [ "$session_status" = "paused" ]; then
-              echo "Session is suspended/paused, sending incremental review request..."
-              update_session_with_retry "$SESSION_ID" "$INCREMENTAL_INSTRUCTIONS"
-            elif [ "$session_status" = "initializing" ] || [ "$session_status" = "starting" ]; then
-              echo "Session is still initializing, will wait for it to be ready..."
-              # 初期化中の場合は少し待ってから再試行しない（結果取得時に処理）
-            elif [ "$session_status" = "closed" ] || [ "$session_status" = "terminated" ]; then
-              echo "Session has been closed/terminated, creating new session with inherited context..."
-              snapshot_id=$(get_session_snapshot "$SESSION_ID")
-              if [ -n "$snapshot_id" ] && [ "$snapshot_id" != "" ]; then
-                echo "Using snapshot from closed session: $snapshot_id"
-                create_session "$INCREMENTAL_INSTRUCTIONS" "$snapshot_id"
-              else
-                echo "No snapshot available from closed session, creating fresh session"
-                create_session "$INCREMENTAL_INSTRUCTIONS"
-              fi
-            else
-              echo "Session status unclear ($session_status), sending review request (incremental)..."
-              update_session_with_retry "$SESSION_ID" "$INCREMENTAL_INSTRUCTIONS"
-            fi
+            # 初回PR作成時は既存セッションがあっても新しいセッションを作成
+            echo "Creating new session for initial PR review..."
+            create_session "$FULL_INSTRUCTIONS"
           fi
           
-          # 最新のコミットについての追加レビューをリクエスト（常に最新差分を送る）
-          latest_commit_sha="${{ github.event.pull_request.head.sha || github.sha }}"
-          latest_commit_instruction="最新のコミット ${latest_commit_sha} の変更点について追加レビューをお願いします。差分のみをレビューし、ラベルプレフィックス（[Issue],[Suggestion],[Nit],[Question]）を使用してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）」という標題を付けてください。"
-          
-          # SESSION_ID を使って更新（create_session の後でも SESSION_ID がセットされている）
-          if [ -z "$SESSION_ID" ]; then
-            echo "No SESSION_ID available to send latest commit review"
-            exit 1
-          fi
-          update_session_with_retry "$SESSION_ID" "$latest_commit_instruction"
+          # 初回PR作成時は全体レビューのみ実行（追加のコミットレビューは不要）
+          echo "Initial PR review completed. For additional reviews, use @devin-ai-review comment."
           
       - name: Set job outputs
         run: |
