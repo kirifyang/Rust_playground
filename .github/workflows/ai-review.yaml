@@ -3,9 +3,20 @@ name: Devin Code Review
 on:
   pull_request:
     types: [opened, synchronize]
+    branches: ['**']  # 在所有分支上触发
 
   issue_comment:
     types: [created]   # コメント作成時にトリガー
+  
+  push:
+    branches: ['**']   # 在任何分支推送时也可以触发（可选）
+  
+  workflow_dispatch:  # 手动触发选项
+    inputs:
+      pr_number:
+        description: 'Pull Request Number'
+        required: false
+        default: ''
 
 permissions:
   contents: read
