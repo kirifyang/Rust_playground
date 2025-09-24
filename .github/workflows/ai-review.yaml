@@ -30,7 +30,7 @@ jobs:
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
             body="${{ github.event.comment.body }}"
             echo "Comment body: $body"
-            if echo "$body" | grep -q "@devin"; then
+            if echo "$body" | grep -q "@devin-ai-review"; then
               echo "trigger=true" >> $GITHUB_OUTPUT
             else
               echo "trigger=false" >> $GITHUB_OUTPUT
