@@ -11,9 +11,12 @@ use std::sync::{
 use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
 
+#[allow(dead_code)]
 const CLICKHOUSE_USER_FILE_PATH: &str = "./clickhouse/click_data/user_files";
 // semaphores are used to limit the number of concurrent tasks
+#[allow(dead_code)]
 const TASK_SEMAPHORE_LIMIT: usize = 3;
+#[allow(dead_code)]
 const TASK_WAIT_TIME: u64 = 5;
 
 #[allow(dead_code)]
@@ -59,6 +62,7 @@ pub async fn create_table(client: &Client, table_name: &str, schema: String) {
     client.execute(query).await.unwrap();
 }
 
+#[allow(dead_code)]
 pub async fn create_job_table(client: &Client, table_name: &str, schema: String) {
     drop_table(client, table_name).await;
     let query = format!(
@@ -69,6 +73,7 @@ pub async fn create_job_table(client: &Client, table_name: &str, schema: String)
 }
 
 
+#[allow(dead_code)]
 pub async fn insert_table_from_files(client: &Client, table_name: &str) {
     let files = get_csvs_names_grouped_by_date();
 

@@ -1,12 +1,9 @@
 mod db;
-mod job;
 mod r#macro;
 
-use crate::db::file::*;
 use crate::db::ops::*;
 use crate::db::schema::*;
 use klickhouse::*;
-use serde::__private::de::Content::I8;
 use std::time::Duration;
 use tokio::time::sleep;
 // use dotenv::dotenv;
@@ -51,7 +48,7 @@ async fn main() {
     });
 
     // let schema = Opensky::schema();
-    create_table(&client, Opensky::table_name(), Opensky::schema(), Opensky::columns().find("day")).await;
+    create_table(&client, Opensky::table_name(), Opensky::schema()).await;
     // insert_table_from_files(&client, Opensky::table_name()).await;
     // create_job_table(
     //     &client,

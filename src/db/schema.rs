@@ -1,4 +1,3 @@
-use futures::future::err;
 use klickhouse::{Date, DateTime, Row};
 use serde::{Deserialize, Serialize};
 
@@ -7,12 +6,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Row)]
 pub(crate) struct MaxDateRow {
     #[serde(rename = "max(toDate(day))")]
-    max_date: Date,
+    pub(crate) max_date: Date,
 }
 #[derive(Debug, Deserialize, Row)]
 pub(crate) struct MinDateRow {
     #[serde(rename = "min(toDate(day))")]
-    min_date: Date,
+    pub(crate) min_date: Date,
 }
 
 #[derive(Row, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,15 +42,16 @@ impl Opensky {
     pub fn table_name() -> &'static str {
         "Opensky"
     }
+    #[allow(dead_code)]
     pub fn find_target_column(target: &str) -> Vec<String> {
-        match Opensky::column_names().iter().position(|x| x == target) {
-            Some(i) => Opensky::column_names()[i].clone(),
+        match Opensky::columns().iter().position(|x| x == target) {
+            Some(i) => vec![Opensky::columns()[i].clone()],
             _ => vec![],
         }
-        return vec![];
     }
 
-        pub fn columns() -> Vec<String> {
+    #[allow(dead_code)]
+    pub fn columns() -> Vec<String> {
             vec![
                 "callsign".to_string(),
                 "number".to_string(),
@@ -74,52 +74,59 @@ impl Opensky {
     }
 
 
-    // Schema of the intergration job table
-}
+// Schema of the intergration job table
 
+#[allow(dead_code)]
 enum TransformVariant {
     Union,
     Freeform,
     UpsertCapture,
 }
 
+#[allow(dead_code)]
 enum SinkVariant {
     BigQuery,
     Chikyu,
     Ma,
 }
 
+#[allow(dead_code)]
 enum BigQueryWriteOption {
-    truncate,
-    append,
-    empty,
+    Truncate,
+    Append,
+    Empty,
 }
 
+#[allow(dead_code)]
 enum BigQueryTimePartitioningType {
-    day,
-    hour,
-    month,
-    year,
+    Day,
+    Hour,
+    Month,
+    Year,
 }
 
+#[allow(dead_code)]
 enum ChikyuWriteSemantics {
-    insert,
-    upsert,
-    update,
+    Insert,
+    Upsert,
+    Update,
 }
 
 // key_search_option: id, value, display_name
 // 空欄ならばデフォルト。ただし空欄にできるのはinsert_onlyの場合に限る
+#[allow(dead_code)]
 enum ChikyuFindRecordBy {
-    id,
-    value,
-    display_name,
+    Id,
+    Value,
+    DisplayName,
 }
-enum chikyu_find_record_matching_field {
-    account_id,
-    stock_cd,
+#[allow(dead_code)]
+enum ChikyuFindRecordMatchingField {
+    AccountId,
+    StockCd,
 }
 
+#[allow(dead_code)]
 pub struct IntergrationJob {
     // general
     integration_job_id: i64,
@@ -149,7 +156,7 @@ pub struct IntergrationJob {
     chikyu_collection: Option<String>,
     chikyu_write_semantics: Option<ChikyuWriteSemantics>,
     chikyu_find_record_by: Option<ChikyuFindRecordBy>,
-    chikyu_find_record_matching_field: Option<chikyu_find_record_matching_field>,
+    chikyu_find_record_matching_field: Option<ChikyuFindRecordMatchingField>,
     chikyu_create_list: Option<String>,
     chikyu_feature_omit_save_notify: Option<bool>,
     chikyu_feature_omit_all_validation_rules: Option<bool>,
@@ -166,10 +173,12 @@ pub struct IntergrationJob {
 }
 
 impl IntergrationJob {
+    #[allow(dead_code)]
     pub fn schema() -> String {
         "integration_job_id Int64, task_order Int64, id String, is_enabled UInt8, comment String, transform_variant String, freeform_select_query String, upsertcapture_old_source_ids Array(String), sink_variant String, bigquery_gcs_connection_id Int64, bigquery_project String, bigquery_dataset String, bigquery_table String, bigquery_write_option String, bigquery_time_partitioning_field String, bigquery_time_partitioning_type String, bigquery_time_partitioning_expiration Int64, bigquery_range_partitioning Int64, bigquery_require_partition_filter UInt8, bigquery_clustering_fields Array(String), chikyu_connection_id Int64, chikyu_organization String, chikyu_collection String, chikyu_write_semantics String, chikyu_find_record_by String, chikyu_find_record_matching_field String, chikyu_create_list String, chikyu_feature_omit_save_notify UInt8, chikyu_feature_omit_all_validation_rules UInt8, chikyu_feature_omit_validation_rules_by_id_set Array(Int64), chikyu_optimize_enable_all_speedup_options UInt8, ma_aws_connection_id Int64, ma_source String, ma_detail_type String, ma_bus_name String, ma_organ_id Int64, ma_kind String, ma_unique_fields Array(String)"
             .to_string()
     }
+    #[allow(dead_code)]
     pub fn table_name() -> &'static str {
         "IntergrationJob"
     }
