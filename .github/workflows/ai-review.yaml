@@ -209,6 +209,79 @@ jobs:
             echo "Session updated successfully"
           }
 
+          update_session_with_retry() {
+            local session_id="$1"
+            local message="$2"
+            local max_attempts=3
+            local wait_time=30
+            
+            echo "Updating Devin session with retry logic: $session_id"
+            
+            for attempt in $(seq 1 $max_attempts); do
+              echo "Attempt $attempt/$max_attempts to update session..."
+              
+              # まずセッションの状態を確認
+              local session_status
+              session_status=$(check_session_status "$session_id")
+              
+              if [ "$session_status" = "exited" ] || [ "$session_status" = "completed" ]; then
+                echo "Session has already exited/completed. Will use existing results."
+                return 0
+              fi
+              
+              # 初期化中の場合は待機
+              if [ "$session_status" = "initializing" ] || [ "$session_status" = "starting" ]; then
+                echo "Session is still initializing (status: $session_status), waiting ${wait_time}s..."
+                sleep $wait_time
+                continue
+              fi
+              
+              local escaped_message=$(echo "$message" | jq -R -s .)
+              local response
+              response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/session/${session_id}/message" \
+                -H "Authorization: Bearer $DEVIN_API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{\"message\": $escaped_message}")
+              local http_status
+              http_status=$(echo "$response" | tail -n 1)
+              echo "Request info: status code = $http_status"
+              
+              if [ "$http_status" -eq 200 ]; then
+                echo "Session updated successfully"
+                return 0
+              elif [ "$http_status" -eq 400 ]; then
+                local http_body
+                http_body=$(echo "$response" | sed '$d')
+                echo "400 error: $http_body"
+                
+                # 初期化エラーの場合は再試行
+                if [[ "$http_body" == *"still initializing"* ]] || [[ "$http_body" == *"initializing"* ]]; then
+                  echo "Session still initializing, waiting ${wait_time}s before retry..."
+                  sleep $wait_time
+                  continue
+                fi
+                
+                # 既に終了している場合
+                if [[ "$http_body" == *"already exited"* ]] || [[ "$http_body" == *"Devin session already exited"* ]]; then
+                  echo "Session already exited, will use existing results."
+                  return 0
+                fi
+                
+                echo "Unhandled 400 error: $http_body"
+                exit 1
+              else
+                echo "Failed to update session: $response"
+                if [ $attempt -lt $max_attempts ]; then
+                  echo "Waiting ${wait_time}s before retry..."
+                  sleep $wait_time
+                else
+                  echo "Max attempts reached, giving up"
+                  exit 1
+                fi
+              fi
+            done
+          }
+
           # 指示文を環境変数から取得（playbook_idの代わりにidempotentパラメータを使用）
 
           if [ -z "$session_comment" ]; then
@@ -242,9 +315,15 @@ jobs:
               echo "Session already completed/exited, will use existing results."
             elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
               echo "Session is still running, will wait for results..."
+            elif [ "$session_status" = "suspended" ] || [ "$session_status" = "paused" ]; then
+              echo "Session is suspended/paused, sending incremental review request..."
+              update_session_with_retry "$SESSION_ID" "$INCREMENTAL_INSTRUCTIONS"
+            elif [ "$session_status" = "initializing" ] || [ "$session_status" = "starting" ]; then
+              echo "Session is still initializing, will wait for it to be ready..."
+              # 初期化中の場合は少し待ってから再試行しない（結果取得時に処理）
             else
-              echo "Session status unclear, sending review request (incremental)..."
-              update_session "$SESSION_ID" "$INCREMENTAL_INSTRUCTIONS"
+              echo "Session status unclear ($session_status), sending review request (incremental)..."
+              update_session_with_retry "$SESSION_ID" "$INCREMENTAL_INSTRUCTIONS"
             fi
           fi
           
@@ -257,7 +336,7 @@ jobs:
             echo "No SESSION_ID available to send latest commit review"
             exit 1
           fi
-          update_session "$SESSION_ID" "$latest_commit_instruction"
+          update_session_with_retry "$SESSION_ID" "$latest_commit_instruction"
           
   slack-notification:
     runs-on: ubuntu-latest
