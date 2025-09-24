@@ -3,6 +3,20 @@ name: Devin Code Review
 on:
   pull_request:
     types: [opened, synchronize]
+    branches: ['**']
+
+  issue_comment:
+    types: [created]   # コメント作成時にトリガー
+  
+  push:
+    branches: ['**']
+  
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Pull Request Number'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -15,21 +29,61 @@ jobs:
     env:
       DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FULL_INSTRUCTIONS: |
+        指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} をレビューしてください。最初の実行（セッション未作成）では必ずPR全体を通読してサマリ（変更の要約、目的、影響範囲）を作成し、その上でコードレビューを行ってください。レビューは日本語で行ってください。出力には必須で次のタイトルを含めてください: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（全体）"。
+        
+        制約・形式（必須）:
+        - 評価は簡潔に、要点を最初に述べること。
+        - 指摘にはラベルプレフィックスを付けること。使用するラベル（少なくともこれらを利用）: [Issue]（重大なバグや動作不良）, [Suggestion]（機能改善提案）, [Nit]（軽微なスタイル/表記修正）, [Question]（不明点・確認事項）.
+        - 各指摘は「ファイルパス:行番号（可能なら）」、短い説明、必要なら修正例/パッチ案 を含める。
+        - 重要度は High / Medium / Low のいずれかでタグ付けしてください。
+        - サマリ部分では、変更の目的、影響範囲、テストの要否を明記してください。
+        
+        出力構造（例）:
+        1) 見出し（必須）: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（全体）"
+        2) サマリ（3-5行程度）
+        3) 主要な問題（[Issue]）一覧（各1-3行 + 必要な修正例）
+        4) 改善提案（[Suggestion]）一覧
+        5) 軽微な指摘（[Nit]）
+        6) 確認事項（[Question]）
+        7) 最後に総評と優先度の高い修正リスト
+      INCREMENTAL_INSTRUCTIONS: |
+        指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} の最新の変更（差分）のみをレビューしてください。初回セッションの後の呼び出しでは、PR全体のサマリは不要です。以下の形式で日本語で回答してください。タイトルは必須で "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）" としてください。
+        
+        制約・形式（必須）:
+        - 差分に対してのみレビューを行うこと（影響するファイルと変更箇所を明記）。
+        - ラベルプレフィックスは full_instructions と同様に利用: [Issue], [Suggestion], [Nit], [Question]
+        - 各指摘に対し簡潔な修正提案を含める。重要度は High / Medium / Low を付与。
+        
+        出力構造（例）:
+        1) 見出し（必須）: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）"
+        2) 変更点の要約（1-3行）
+        3) 指摘一覧（ラベル付き）
+        4) 必要な修正案と優先度
     steps:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
 
-      - name: Check PR body for devin-review
+      - name: Check if triggered by comment
+        id: check-comment
         run: |
-          echo "PR body: ${{ github.event.pull_request.body }}"
-          # devin-reviewを含む場合、または空白の場合（デフォルト）でもレビューを実行
-          echo "Contains devin-review: ${{ contains(github.event.pull_request.body, 'devin-review') || github.event.pull_request.body == '' }}"
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            body="${{ github.event.comment.body }}"
+            echo "Comment body: $body"
+            if echo "$body" | grep -q "@devin-ai-review"; then
+              echo "trigger=true" >> $GITHUB_OUTPUT
+            else
+              echo "trigger=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            # 对于 pull_request 事件（opened/synchronize）默认执行
+            echo "trigger=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Devin review combined
-        # skip-reviewがない限り常に実行
-        if: "!contains(github.event.pull_request.body, 'skip-review')"
+        if: steps.check-comment.outputs.trigger == 'true' && !contains(github.event.pull_request.body, 'skip-review')
         run: |
           echo "Starting Devin review process..."
           
@@ -39,8 +93,41 @@ jobs:
             exit 1
           fi
           
-          # セッションIDの抽出を修正
-          session_comment=$(gh pr view "${{ github.event.number }}" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | head -n 1)
+          # PR番号の設定と確認（イベントタイプに応じて適切な値を取得）
+          echo "Event name: ${{ github.event_name }}"
+          
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUMBER="${{ github.event.number }}"
+            echo "Pull request event: PR #$PR_NUMBER"
+          elif [ "${{ github.event_name }}" = "issue_comment" ]; then
+            PR_NUMBER="${{ github.event.issue.number }}"
+            echo "Issue comment event: Issue/PR #$PR_NUMBER"
+            # issue_commentイベントでPRかどうか確認
+            if [ "${{ github.event.issue.pull_request }}" = "" ]; then
+              echo "This comment is on an issue, not a pull request. Exiting."
+              exit 0
+            fi
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PR_NUMBER="${{ github.event.inputs.pr_number }}"
+            echo "Manual trigger: PR #$PR_NUMBER"
+          else
+            # pushイベントなどの場合、現在のブランチに関連するPRを検索
+            echo "Searching for PR associated with current branch..."
+            CURRENT_BRANCH="${{ github.event.pull_request.head.ref || github.ref_name }}"
+            PR_NUMBER=$(gh pr list --head "$CURRENT_BRANCH" --json number --jq '.[0].number // empty')
+            echo "Found PR #$PR_NUMBER for branch $CURRENT_BRANCH"
+          fi
+          
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+            echo "PR number not available. This workflow is designed for Pull Requests."
+            echo "Event: ${{ github.event_name }}, Branch: ${{ github.ref_name }}"
+            exit 1
+          fi
+          
+          echo "Using PR number: $PR_NUMBER"
+          
+          # セッションIDの抽出を修正（最新のコメントを取得）
+          session_comment=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | head -n 1)
 
           check_session_status() {
             local session_id="$1"
@@ -55,11 +142,70 @@ jobs:
             echo "$status"
           }
 
+          get_session_snapshot() {
+            local session_id="$1"
+            echo "Getting snapshot for session: $session_id"
+            local response
+            response=$(curl -s -X GET "https://api.devin.ai/v1/session/${session_id}" \
+              -H "Authorization: Bearer $DEVIN_API_KEY")
+            
+            local snapshot_id
+            snapshot_id=$(echo "$response" | jq -r '.snapshot_id // empty')
+            if [ -n "$snapshot_id" ] && [ "$snapshot_id" != "null" ]; then
+              echo "Found snapshot ID: $snapshot_id"
+              echo "$snapshot_id"
+            else
+              echo "No snapshot ID found for session $session_id"
+              echo ""
+            fi
+          }
+
+          get_latest_session_info() {
+            echo "Searching for latest session from PR comments..."
+            local latest_session_comment
+            latest_session_comment=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | tail -n 1)
+            
+            if [ -n "$latest_session_comment" ]; then
+              local session_id
+              session_id=$(echo "$latest_session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
+              echo "Found latest session: $session_id"
+              echo "$session_id"
+            else
+              echo "No previous session found in PR comments"
+              echo ""
+            fi
+          }
+
           create_session() {
             local prompt="$1"
+            local snapshot_id="$2"  # オプショナルなsnapshotパラメータ
             echo "Creating new Devin session..."
             local escaped_prompt=$(echo "$prompt" | jq -R -s .)
             local response
+            
+            # リクエストボディを構築（snapshot_idがある場合は含める）
+            local request_body
+            if [ -n "$snapshot_id" ] && [ "$snapshot_id" != "" ]; then
+              echo "Using snapshot ID to inherit context: $snapshot_id"
+              request_body=$(jq -n \
+                --arg prompt "$prompt" \
+                --arg snapshot "$snapshot_id" \
+                '{
+                  "prompt": $prompt,
+                  "snapshot_id": $snapshot,
+                  "idempotent": true
+                }')
+            else
+              echo "Creating fresh session without context inheritance"
+              request_body=$(jq -n \
+                --arg prompt "$prompt" \
+                '{
+                  "prompt": $prompt,
+                  "idempotent": true
+                }')
+            fi
+            
+            # idempotentパラメータを使用して、同一プロンプトでの重複セッション作成を防止
             response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/sessions" \
               -H "Authorization: Bearer $DEVIN_API_KEY" \
               -H "Content-Type: application/json" \
@@ -121,12 +267,121 @@ jobs:
             echo "Session updated successfully"
           }
 
-          instructions="指示: ${{ github.repository }}の Pull Request #${{ github.event.number }} をレビューしてください。レビューでは以下を行ってください: 1. Pull Requestの変更点を確認し、コードの品質、バグ、セキュリティの問題がないかを確認する 2. 変更内容のサマリと、潜在的な問題点や改善点を簡潔にまとめてください 3. 特に重要な問題がある場合は、具体的な修正提案を含めてください 4. レビュー結果をPull Requestにコメントとして投稿してください。制約事項: すべてのコメントは日本語で行ってください。簡潔で要点を絞ったレビューを心がけてください。重大な問題がない場合も、改善提案があれば記載してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果」という標題を付けてください。PRコメントも同様の内容で投稿してください。"
+          update_session_with_retry() {
+            local session_id="$1"
+            local message="$2"
+            local max_attempts=3
+            local wait_time=30
+            
+            echo "Updating Devin session with retry logic: $session_id"
+            
+            for attempt in $(seq 1 $max_attempts); do
+              echo "Attempt $attempt/$max_attempts to update session..."
+              
+              # まずセッションの状態を確認
+              local session_status
+              session_status=$(check_session_status "$session_id")
+              
+              if [ "$session_status" = "exited" ] || [ "$session_status" = "completed" ]; then
+                echo "Session has already exited/completed. Will use existing results."
+                return 0
+              fi
+              
+              # 初期化中の場合は待機
+              if [ "$session_status" = "initializing" ] || [ "$session_status" = "starting" ]; then
+                echo "Session is still initializing (status: $session_status), waiting ${wait_time}s..."
+                sleep $wait_time
+                continue
+              fi
+              
+              local escaped_message=$(echo "$message" | jq -R -s .)
+              local response
+              response=$(curl -s -w "\n%{http_code}" -X POST "https://api.devin.ai/v1/session/${session_id}/message" \
+                -H "Authorization: Bearer $DEVIN_API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{\"message\": $escaped_message}")
+              local http_status
+              http_status=$(echo "$response" | tail -n 1)
+              echo "Request info: status code = $http_status"
+              
+              if [ "$http_status" -eq 200 ]; then
+                echo "Session updated successfully"
+                return 0
+              elif [ "$http_status" -eq 400 ]; then
+                local http_body
+                http_body=$(echo "$response" | sed '$d')
+                echo "400 error: $http_body"
+                
+                # 初期化エラーの場合は再試行
+                if [[ "$http_body" == *"still initializing"* ]] || [[ "$http_body" == *"initializing"* ]]; then
+                  echo "Session still initializing, waiting ${wait_time}s before retry..."
+                  sleep $wait_time
+                  continue
+                fi
+                
+                # 既に終了している場合
+                if [[ "$http_body" == *"already exited"* ]] || [[ "$http_body" == *"Devin session already exited"* ]]; then
+                  echo "Session already exited, will use existing results."
+                  return 0
+                fi
+                
+                echo "Unhandled 400 error: $http_body"
+                exit 1
+              else
+                echo "Failed to update session: $response"
+                if [ $attempt -lt $max_attempts ]; then
+                  echo "Waiting ${wait_time}s before retry..."
+                  sleep $wait_time
+                else
+                  echo "Max attempts reached, giving up"
+                  exit 1
+                fi
+              fi
+            done
+          }
 
+          # 指示文を環境変数から取得（playbook_idの代わりにidempotentパラメータを使用）
+
+          # 智能会话管理：尝试继承现有会话或从快照创建新会话
           if [ -z "$session_comment" ]; then
-            # 初回の場合は新セッションを作成（全コミットをレビュー）
-            echo "No existing session found, creating new session for full PR review"
-            create_session "$instructions"
+            # 没有找到现有会话，尝试查找之前的会话快照
+            echo "No existing session found, looking for previous sessions to inherit from..."
+            previous_session=$(get_latest_session_info)
+            
+            if [ -n "$previous_session" ] && [ "$previous_session" != "" ]; then
+              echo "Found previous session: $previous_session"
+              previous_status=$(check_session_status "$previous_session")
+              echo "Previous session status: $previous_status"
+              
+              # 如果之前的会话已完成或退出，尝试获取其快照
+              if [ "$previous_status" = "completed" ] || [ "$previous_status" = "exited" ] || [ "$previous_status" = "finished" ]; then
+                snapshot_id=$(get_session_snapshot "$previous_session")
+                if [ -n "$snapshot_id" ] && [ "$snapshot_id" != "" ]; then
+                  echo "Creating new session with inherited context from snapshot: $snapshot_id"
+                  create_session "$FULL_INSTRUCTIONS" "$snapshot_id"
+                else
+                  echo "No snapshot available, creating fresh session"
+                  create_session "$FULL_INSTRUCTIONS"
+                fi
+              else
+                echo "Previous session still active ($previous_status), creating fresh session"
+                create_session "$FULL_INSTRUCTIONS"
+              fi
+            else
+              echo "No previous sessions found, creating fresh session for full PR review"
+              create_session "$FULL_INSTRUCTIONS"
+            fi
+            
+            # create_session 内で export SESSION_ID しているはずなので読み込む
+            if [ -n "$SESSION_ID" ]; then
+              echo "SESSION_ID set to $SESSION_ID from create_session"
+            else
+              # 保险: 再取得を試みる
+              echo "SESSION_ID not exported, trying to re-read from PR comments..."
+              session_comment=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | head -n 1)
+              SESSION_ID=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
+              export SESSION_ID
+            fi
           else
             # 既存セッションがある場合
             session_id=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
@@ -134,29 +389,53 @@ jobs:
               echo "Failed to extract session ID from comment: $session_comment"
               exit 1
             fi
+            export SESSION_ID="$session_id"
             
-            session_status=$(check_session_status "$session_id")
+            session_status=$(check_session_status "$SESSION_ID")
             echo "Existing session status: $session_status"
             
             # セッションが完了済みの場合は既存結果を使用
-            if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ]; then
+            if [ "$session_status" = "completed" ] || [ "$session_status" = "exited" ] || [ "$session_status" = "finished" ]; then
               echo "Session already completed/exited, will use existing results."
             elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
               echo "Session is still running, will wait for results..."
+            elif [ "$session_status" = "suspended" ] || [ "$session_status" = "paused" ]; then
+              echo "Session is suspended/paused, sending incremental review request..."
+              update_session_with_retry "$SESSION_ID" "$INCREMENTAL_INSTRUCTIONS"
+            elif [ "$session_status" = "initializing" ] || [ "$session_status" = "starting" ]; then
+              echo "Session is still initializing, will wait for it to be ready..."
+              # 初期化中の場合は少し待ってから再試行しない（結果取得時に処理）
+            elif [ "$session_status" = "closed" ] || [ "$session_status" = "terminated" ]; then
+              echo "Session has been closed/terminated, creating new session with inherited context..."
+              snapshot_id=$(get_session_snapshot "$SESSION_ID")
+              if [ -n "$snapshot_id" ] && [ "$snapshot_id" != "" ]; then
+                echo "Using snapshot from closed session: $snapshot_id"
+                create_session "$INCREMENTAL_INSTRUCTIONS" "$snapshot_id"
+              else
+                echo "No snapshot available from closed session, creating fresh session"
+                create_session "$INCREMENTAL_INSTRUCTIONS"
+              fi
             else
-              echo "Session status unclear, sending review request..."
-              update_session "$session_id" "$instructions"
+              echo "Session status unclear ($session_status), sending review request (incremental)..."
+              update_session_with_retry "$SESSION_ID" "$INCREMENTAL_INSTRUCTIONS"
             fi
           fi
           
-          # 最新のコミットについての追加レビューをリクエスト
-          latest_commit_instruction="最新のコミット ${{ github.event.pull_request.head.sha }} の変更点について追加レビューをお願いします。前回のレビューに加えて、新しい変更点があれば指摘してください。また、レビュー結果をPull Requestにコメントとして投稿してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）」という標題を付けてください。"
-          update_session "$session_id" "$latest_commit_instruction"
+          # 最新のコミットについての追加レビューをリクエスト（常に最新差分を送る）
+          latest_commit_sha="${{ github.event.pull_request.head.sha || github.sha }}"
+          latest_commit_instruction="最新のコミット ${latest_commit_sha} の変更点について追加レビューをお願いします。差分のみをレビューし、ラベルプレフィックス（[Issue],[Suggestion],[Nit],[Question]）を使用してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）」という標題を付けてください。"
+          
+          # SESSION_ID を使って更新（create_session の後でも SESSION_ID がセットされている）
+          if [ -z "$SESSION_ID" ]; then
+            echo "No SESSION_ID available to send latest commit review"
+            exit 1
+          fi
+          update_session_with_retry "$SESSION_ID" "$latest_commit_instruction"
           
   slack-notification:
     runs-on: ubuntu-latest
     needs: code-review
-    if: always() && !contains(github.event.pull_request.body, 'skip-review')
+    if: success() && !contains(github.event.pull_request.body, 'skip-review')
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
