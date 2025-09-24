@@ -32,6 +32,8 @@ jobs:
       FULL_INSTRUCTIONS: |
         指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} (https://github.com/${{ github.repository }}/pull/${{ github.event.number }})をレビューしてください。最初の実行（セッション未作成）では必ずPR全体を通読してサマリ（変更の要約、目的、影響範囲）を作成し、その上でコードレビューを行ってください。レビューは日本語で行ってください。出力には必須で次のタイトルを含めてください: "${{ github.repository }} PR #${{ github.event.number }} レビュー結果（全体）"。
         
+        **重要**: 確認メッセージや「承知いたしました」などの返答は不要です。直接レビュー結果を出力してください。
+        
         制約・形式（必須）:
         - **重要**: このPRで変更されたファイル（Files changed）のみをレビュー対象とし、変更されていないファイルやコードは一切レビューしないでください。
         - 評価は簡潔に、要点を最初に述べること。
@@ -70,6 +72,8 @@ jobs:
         4) 最後に総評と優先度の高い修正リスト
       INCREMENTAL_INSTRUCTIONS: |
         指示: ${{ github.repository }} の Pull Request #${{ github.event.number }} の最新の変更（差分）のみをレビューしてください。**重要**: このPRで変更されたファイル（Files changed）のみを対象としてコードレビューを行ってください。変更されていないファイルやコードはレビュー対象外です。PRの「Files changed」タブで確認できる変更されたファイルのみをレビューしてください。初回セッションの後の呼び出しでは、PR全体のサマリは不要です。以下の形式で日本語で回答してください。タイトルは必須で "レビュー結果（更新）" としてください。
+        
+        **重要**: 確認メッセージや「承知いたしました」などの返答は不要です。直接レビュー結果を出力してください。
         
         制約・形式（必須）:
         - **重要**: このPRで変更されたファイル（Files changed）のみをレビュー対象とし、変更されていないファイルやコードは一切レビューしないでください。
@@ -547,6 +551,9 @@ jobs:
                   if [[ "$last_devin_message" =~ "レビュー結果" ]]; then
                     echo "Found complete review result with レビュー結果 title"
                     break
+                  elif [[ "$last_devin_message" =~ "承知いたしました" ]] || [[ "$last_devin_message" =~ "確認いたします" ]] || [[ "$last_devin_message" =~ "レビューいたします" ]]; then
+                    echo "Found confirmation message, waiting for actual review results..."
+                    echo "Message preview: ${last_devin_message:0:100}..."
                   else
                     echo "Found devin message but missing レビュー結果 title, will continue waiting..."
                     echo "Message preview: ${last_devin_message:0:100}..."
@@ -583,7 +590,7 @@ jobs:
             results=$(echo "$response" | jq -r '
               if has("messages") then
                 .messages 
-                | map(select(.type == "devin_message" and .message != null))
+                | map(select(.type == "devin_message" and .message != null and (.message | contains("レビュー結果"))))
                 | if length > 0 then .[-1].message else "Devin分析中... セッションID: '"$session_id"'" end
               else
                 "Devin分析中... セッションID: '"$session_id"'"
