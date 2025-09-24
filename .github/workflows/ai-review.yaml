@@ -4,6 +4,9 @@ on:
   pull_request:
     types: [opened, synchronize]
 
+  issue_comment:
+    types: [created]   # コメント作成時にトリガー
+
 permissions:
   contents: read
   pull-requests: write
@@ -19,17 +22,26 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Check PR body for devin-review
+      - name: Check if triggered by comment
+        id: check-comment
         run: |
-          echo "PR body: ${{ github.event.pull_request.body }}"
-          # devin-reviewを含む場合、または空白の場合（デフォルト）でもレビューを実行
-          echo "Contains devin-review: ${{ contains(github.event.pull_request.body, 'devin-review') || github.event.pull_request.body == '' }}"
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            body="${{ github.event.comment.body }}"
+            echo "Comment body: $body"
+            if echo "$body" | grep -q "@devin"; then
+              echo "trigger=true" >> $GITHUB_OUTPUT
+            else
+              echo "trigger=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            # 对于 pull_request 事件（opened/synchronize）默认执行
+            echo "trigger=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Devin review combined
-        # skip-reviewがない限り常に実行
-        if: "!contains(github.event.pull_request.body, 'skip-review')"
+        if: steps.check-comment.outputs.trigger == 'true' && !contains(github.event.pull_request.body, 'skip-review')
         run: |
           echo "Starting Devin review process..."
           
@@ -39,7 +51,7 @@ jobs:
             exit 1
           fi
           
-          # セッションIDの抽出を修正
+          # セッションIDの抽出を修正（最新のコメントを取得）
           session_comment=$(gh pr view "${{ github.event.number }}" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | head -n 1)
 
           check_session_status() {
@@ -121,12 +133,54 @@ jobs:
             echo "Session updated successfully"
           }
 
-          instructions="指示: ${{ github.repository }}の Pull Request #${{ github.event.number }} をレビューしてください。レビューでは以下を行ってください: 1. Pull Requestの変更点を確認し、コードの品質、バグ、セキュリティの問題がないかを確認する 2. 変更内容のサマリと、潜在的な問題点や改善点を簡潔にまとめてください 3. 特に重要な問題がある場合は、具体的な修正提案を含めてください 4. レビュー結果をPull Requestにコメントとして投稿してください。制約事項: すべてのコメントは日本語で行ってください。簡潔で要点を絞ったレビューを心がけてください。重大な問題がない場合も、改善提案があれば記載してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果」という標題を付けてください。PRコメントも同様の内容で投稿してください。"
+          # 指示文を初回用（full）と差分用（incremental）に分離
+          full_instructions="指示: ${GITHUB_REPOSITORY:-${{ github.repository }}} の Pull Request #${{ github.event.number }} をレビューしてください。最初の実行（セッション未作成）では必ずPR全体を通読してサマリ（変更の要約、目的、影響範囲）を作成し、その上でコードレビューを行ってください。レビューは日本語で行ってください。出力には必須で次のタイトルを含めてください: \"${{ github.repository }} PR #${{ github.event.number }} レビュー結果（全体）\"。  
+
+制約・形式（必須）:
+- 評価は簡潔に、要点を最初に述べること。
+- 指摘にはラベルプレフィックスを付けること。使用するラベル（少なくともこれらを利用）: [Issue]（重大なバグや動作不良）, [Suggestion]（機能改善提案）, [Nit]（軽微なスタイル/表記修正）, [Question]（不明点・確認事項）.
+- 各指摘は「ファイルパス:行番号（可能なら）」、短い説明、必要なら修正例/パッチ案 を含める。
+- 重要度は High / Medium / Low のいずれかでタグ付けしてください。
+- サマリ部分では、変更の目的、影響範囲、テストの要否を明記してください。
+
+出力構造（例）:
+1) 見出し（必須）: \"${{ github.repository }} PR #${{ github.event.number }} レビュー結果（全体）\"
+2) サマリ（3-5行程度）
+3) 主要な問題（[Issue]）一覧（各1-3行 + 必要な修正例）
+4) 改善提案（[Suggestion]）一覧
+5) 軽微な指摘（[Nit]）
+6) 確認事項（[Question]）
+7) 最後に総評と優先度の高い修正リスト
+"
+
+          incremental_instructions="指示: ${GITHUB_REPOSITORY:-${{ github.repository }}} PR #${{ github.event.number }} の最新の変更（差分）のみをレビューしてください。初回セッションの後の呼び出しでは、PR全体のサマリは不要です。以下の形式で日本語で回答してください。タイトルは必須で \"${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）\" としてください。
+
+制約・形式（必須）:
+- 差分に対してのみレビューを行うこと（影響するファイルと変更箇所を明記）。
+- ラベルプレフィックスは full_instructions と同様に利用: [Issue], [Suggestion], [Nit], [Question]
+- 各指摘に対し簡潔な修正提案を含める。重要度は High / Medium / Low を付与。
+
+出力構造（例）:
+1) 見出し（必須）: \"${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）\"
+2) 変更点の要約（1-3行）
+3) 指摘一覧（ラベル付き）
+4) 必要な修正案と優先度
+"
 
           if [ -z "$session_comment" ]; then
             # 初回の場合は新セッションを作成（全コミットをレビュー）
             echo "No existing session found, creating new session for full PR review"
-            create_session "$instructions"
+            create_session "$full_instructions"
+            # create_session 内で export SESSION_ID しているはずなので読み込む
+            if [ -n "$SESSION_ID" ]; then
+              echo "SESSION_ID set to $SESSION_ID from create_session"
+            else
+              # 保険: 再取得を試みる
+              echo "SESSION_ID not exported, trying to re-read from PR comments..."
+              session_comment=$(gh pr view "${{ github.event.number }}" --json comments --jq '.comments[] | select(.body | contains("Devin Session ID:")) | .body' | head -n 1)
+              SESSION_ID=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
+              export SESSION_ID
+            fi
           else
             # 既存セッションがある場合
             session_id=$(echo "$session_comment" | sed -n 's/.*Devin Session ID: \([^ ]*\).*/\1/p')
@@ -134,8 +188,9 @@ jobs:
               echo "Failed to extract session ID from comment: $session_comment"
               exit 1
             fi
+            export SESSION_ID="$session_id"
             
-            session_status=$(check_session_status "$session_id")
+            session_status=$(check_session_status "$SESSION_ID")
             echo "Existing session status: $session_status"
             
             # セッションが完了済みの場合は既存結果を使用
@@ -144,14 +199,21 @@ jobs:
             elif [ "$session_status" = "running" ] || [ "$session_status" = "active" ]; then
               echo "Session is still running, will wait for results..."
             else
-              echo "Session status unclear, sending review request..."
-              update_session "$session_id" "$instructions"
+              echo "Session status unclear, sending review request (incremental)..."
+              update_session "$SESSION_ID" "$incremental_instructions"
             fi
           fi
           
-          # 最新のコミットについての追加レビューをリクエスト
-          latest_commit_instruction="最新のコミット ${{ github.event.pull_request.head.sha }} の変更点について追加レビューをお願いします。前回のレビューに加えて、新しい変更点があれば指摘してください。また、レビュー結果をPull Requestにコメントとして投稿してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）」という標題を付けてください。"
-          update_session "$session_id" "$latest_commit_instruction"
+          # 最新のコミットについての追加レビューをリクエスト（常に最新差分を送る）
+          latest_commit_sha="${{ github.event.pull_request.head.sha }}"
+          latest_commit_instruction="最新のコミット ${latest_commit_sha} の変更点について追加レビューをお願いします。差分のみをレビューし、ラベルプレフィックス（[Issue],[Suggestion],[Nit],[Question]）を使用してください。必須: 回答の最初に「${{ github.repository }} PR #${{ github.event.number }} レビュー結果（更新）」という標題を付けてください。"
+          
+          # SESSION_ID を使って更新（create_session の後でも SESSION_ID がセットされている）
+          if [ -z "$SESSION_ID" ]; then
+            echo "No SESSION_ID available to send latest commit review"
+            exit 1
+          fi
+          update_session "$SESSION_ID" "$latest_commit_instruction"
           
   slack-notification:
     runs-on: ubuntu-latest
